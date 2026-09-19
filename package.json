@@ -1,0 +1,32 @@
+{
+  "name": "solar-power-generation",
+  "version": "1.0.0",
+  "description": "Real-time and historical generation data for Sri Lanka's rooftop solar estate.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://ipiyumii@github.com/ipiyumii/solar-power-generation.git"
+  },
+  "author": "Piyumi Warnakulasuriya",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ipiyumii/solar-power-generation/issues"
+  },
+  "homepage": "https://github.com/ipiyumii/solar-power-generation#readme",
+  "dependencies": {
+    "dotenv": "^18.0.1",
+    "express": "^5.2.1",
+    "mongoose": "^9.10.1",
+    "mysql2": "^3.24.4",
+    "zod": "^4.6.5"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "private": true
+}
