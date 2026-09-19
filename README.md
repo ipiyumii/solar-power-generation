@@ -6,13 +6,13 @@ Built for the **Sri Lanka Sustainable Energy Authority (SLSEA)**, Ministry of En
 
 | | |
 |---|---|
-| **Live API** | `https://<your-service>.onrender.com/api/v1` — *fill in once deployed* |
-| **OpenAPI / Swagger** | `https://<your-service>.onrender.com/api/v1/docs` |
-| **Health** | `https://<your-service>.onrender.com/health` |
+| **Live API** | `https://<id>.<region>.awsapprunner.com/api/v1` — *fill in once deployed* |
+| **OpenAPI / Swagger** | `https://<id>.<region>.awsapprunner.com/api/v1/docs` |
+| **Health** | `https://<id>.<region>.awsapprunner.com/health` |
 | **Status** | In development |
-| **Full specification** | [project.md](project.md) |
+| **Full specification** | [project.md](docs/project.md) |
 
-**Documentation:** [project.md](project.md) (purpose, requirements, constraints) · [ARCHITECTURE.md](ARCHITECTURE.md) (layers, request lifecycle) · [API_DESIGN.md](API_DESIGN.md) (endpoints, methods, status codes) · [DATABASE.md](DATABASE.md) (collections, indexes, seed) · [SECURITY.md](SECURITY.md) (threat model, JWT, jurisdiction scoping)
+**Documentation:** [project.md](docs/project.md) (purpose, requirements, constraints) · [ARCHITECTURE.md](docs/ARCHITECTURE.md) (layers, request lifecycle) · [API_DESIGN.md](docs/API_DESIGN.md) (endpoints, methods, status codes) · [DATABASE.md](docs/DATABASE.md) (schema, indexes, seed) · [SECURITY.md](docs/SECURITY.md) (threat model, JWT, jurisdiction scoping) · [DEPLOYMENT.md](docs/DEPLOYMENT.md) (AWS topology, RDS, going live)
 
 > This is a backend service only. No dashboard, BI tool or client application is part of the deliverable — **the OpenAPI surface is the interface**.
 
@@ -49,9 +49,16 @@ The data producer (the device) and the data consumer (the analyst) are different
 ```bash
 git clone <repo-url> && cd solar-power-generation
 npm ci
-cp .env.example .env          # then fill in MONGODB_URI and JWT_SECRET
-npm run seed -- --fresh       # ~148k readings, takes 2-4 minutes
+cp .env.example .env          # then fill in the DB_* variables and JWT_SECRET
+npm run migrate               # create the schema
+npm run seed -- --fresh       # 147,840 readings, takes 2-4 minutes
 npm start                     # http://localhost:5000
+```
+
+Local development needs a MySQL 8 instance. The quickest is Docker:
+
+```bash
+docker run --name slsea-mysql -p 3306:3306 -d \n  -e MYSQL_ROOT_PASSWORD=dev -e MYSQL_DATABASE=slsea mysql:8
 ```
 
 Generate a signing secret:
@@ -64,13 +71,17 @@ node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `MONGODB_URI` | yes | MongoDB Atlas connection string |
+| `DB_HOST` | yes | MySQL host — the RDS endpoint in production |
+| `DB_PORT` | no | Defaults to `3306` |
+| `DB_NAME` | yes | `slsea` |
+| `DB_USER` | yes | `slsea_app` in production — no DDL rights |
+| `DB_PASSWORD` | yes | From AWS Secrets Manager in production |
 | `JWT_SECRET` | yes | HS256 signing secret, 256 bits or longer |
 | `JWT_USER_TTL` | yes | User token lifetime, e.g. `8h` |
 | `JWT_DEVICE_TTL` | yes | Device token lifetime, e.g. `1h` |
 | `PUBLIC_BASE_URL` | **yes in production** | Base URL for pagination links. Unset, every link points at `localhost` |
 | `NODE_ENV` | yes | `development` / `production` |
-| `PORT` | no | Defaults to `5000` |
+| `PORT` | no | Defaults to `5000`; **injected by App Runner** in production, so it must be read rather than hard-coded |
 
 `.env` is never committed.
 
@@ -109,7 +120,7 @@ A device token can never satisfy a read route, and a user token can never satisf
 
 ## Endpoints
 
-All paths are under `/api/v1`. Full contracts, headers and status codes are in [project.md §4–§5](project.md#4-main-features--the-design-spine).
+All paths are under `/api/v1`. Full contracts, headers and status codes are in [project.md §4–§5](docs/project.md#4-main-features--the-design-spine).
 
 ### Hierarchy and assets
 
@@ -198,15 +209,15 @@ Query schemas are **strict** — an unknown or misspelled parameter returns `400
 ├── index.js              # app composition, middleware order, graceful start
 ├── router/               # parse, validate, delegate, respond — no queries here
 ├── services/             # business rules — never touches req or res
-├── repositories/         # the only place that talks to MongoDB
+├── repositories/         # the only place that writes SQL
 ├── middleware/           # auth, jurisdiction scope, error handler, not-found
 ├── utils/                # jwt, etag, pagination links
-├── db/                   # connection, indexes, seeder
+├── db/                   # pool, schema.sql, migrations, seeder
 ├── docs/openapi.yaml     # the contract — updated in the same commit as any change
 └── project.md            # full specification and rubric traceability
 ```
 
-**Layering is an invariant:** Controller → Service → Repository. Routers never build a query; services never see `req`/`res`; repositories are the only database consumers and the only place `_id`, `password_hash` and `device_secret_hash` are projected out.
+**Layering is an invariant:** Controller → Service → Repository. Routers never build a query; services never see `req`/`res`; repositories are the only code that writes SQL, and they use explicit column lists — never `SELECT *` — so `password_hash` and `device_secret_hash` are never fetched at all.
 
 ---
 
@@ -218,9 +229,9 @@ Query schemas are **strict** — an unknown or misspelled parameter returns `400
 | Districts | 25 (correctly mapped to their provinces) |
 | Grid substations | 25 |
 | Solar installations | 220 |
-| Generation readings | 672 per installation (one per 15 min × 7 days) ≈ **147,800** |
+| Generation readings | 672 per installation (one per 15 min × 7 days) = **147,840** |
 
-Readings follow a realistic diurnal curve — rising through the morning, peaking near midday, zero overnight. `energy_kwh` is a **cumulative lifetime counter** and is monotonic non-decreasing per installation.
+Readings follow a realistic diurnal curve — rising through the morning, peaking near midday, zero overnight. `energy_kwh` is a **cumulative lifetime counter** and is monotonic non-decreasing per installation. Foreign keys, `UNIQUE` and `CHECK` constraints make orphans, duplicate readings and negative power impossible rather than merely unlikely.
 
 ```bash
 npm run seed -- --fresh    # rebuild from scratch
@@ -235,7 +246,8 @@ npm run seed -- --verify   # row counts, orphans, monotonicity, duplicate keys
 
 ```bash
 npm start                 # run locally on :5000
-npm run seed -- --fresh   # rebuild fixtures
+npm run migrate           # apply db/migrations
+npm run seed -- --fresh   # rebuild fixtures (add --force against production)
 npm run seed -- --verify  # data integrity report
 npm run smoke             # end-to-end checks against $PUBLIC_BASE_URL
 npm run lint
@@ -247,9 +259,24 @@ Before claiming anything works, run `npm run smoke` against the deployed URL and
 
 ## Design position
 
-The API targets **Richardson Maturity Level 2** — resources, correct HTTP methods, correct status codes and headers. Level 3 (hypermedia) is deliberately out of scope: pagination links are collection navigation, not state-transition affordances, and the named consumers are BI pipelines with compile-time knowledge of the contract. The reasoning is set out in [project.md §10](project.md#10-richardson-maturity-placement).
+The API targets **Richardson Maturity Level 2** — resources, correct HTTP methods, correct status codes and headers. Level 3 (hypermedia) is deliberately out of scope: pagination links are collection navigation, not state-transition affordances, and the named consumers are BI pipelines with compile-time knowledge of the contract. The reasoning is set out in [project.md §10](docs/project.md#10-richardson-maturity-placement).
 
 A cross-jurisdiction **read** returns `404`, not `403` — a `403` would confirm existence and let a district user enumerate the national estate. The device write path is the one deliberate exception and returns `403`, because a device already knows its own installation exists.
+
+---
+
+## Deploying
+
+Two deployables with different lifecycles: the **database** is provisioned once and persists; the **application** is rebuilt on every push. The schema and seed must be loaded into the deployed database — *"operational against seed data"* is an eligibility-gate requirement, and an app pointing at an empty RDS instance returns `[]` from every endpoint.
+
+```
+Internet ──HTTPS──> App Runner (Node 24, auto-deploy on push)
+                         │ VPC connector, port 3306
+                         ▼
+                    RDS MySQL 8 (db.t4g.micro, free tier)
+```
+
+Full walkthrough — RDS setup, security groups, secrets, seeding the live database, cost, and the runbook — is in [DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ---
 
@@ -257,4 +284,4 @@ A cross-jurisdiction **read** returns `404`, not `403` — a `403` would confirm
 
 Coursework for **NB6007CEM Web API Development** — BSc (Hons) Computing (Software Engineering), Level 6, Coventry University / NIBM. Assessed on architecture, API design, coverage, implementation, functionality against seed data, deployment, security and report quality.
 
-AI-assisted code generation is permitted and expected on this module; disclosure is mandatory. Prompts, AI-aids and the critique log of generator faults found and repaired are recorded in the report appendix — see [project.md §13](project.md#13-ai-disclosure-and-viva-preparation).
+AI-assisted code generation is permitted and expected on this module; disclosure is mandatory. Prompts, AI-aids and the critique log of generator faults found and repaired are recorded in the report appendix — see [project.md §13](docs/project.md#13-ai-disclosure-and-viva-preparation).
