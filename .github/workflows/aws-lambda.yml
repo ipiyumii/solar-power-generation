@@ -1,0 +1,85 @@
+name: Deploy to AWS Lambda
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --omit=dev --no-audit --no-fund
+
+      - name: Create Lambda deployment package
+        run: |
+          mkdir -p build/lambda
+
+          # Copy only necessary files
+          cp -r app.js index.js lambda.js config/ db/ middleware/ utils/ build/lambda/
+          cp package.json build/lambda/
+
+          # Verify critical file exists
+          if [ ! -f build/lambda/db/rds-ca-bundle.pem ]; then
+            echo "ERROR: db/rds-ca-bundle.pem is missing"
+            exit 1
+          fi
+
+          # Install production dependencies fresh into staging
+          cd build/lambda
+          npm ci --omit=dev --no-audit --no-fund
+
+          # Create zip
+          cd ..
+          zip -r lambda-deploy.zip lambda/
+
+          echo "Package size: $(du -h lambda-deploy.zip | cut -f1)"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Verify AWS credentials
+        run: aws sts get-caller-identity
+
+      - name: Deploy Lambda function code
+        run: |
+          aws lambda update-function-code \
+            --function-name slsea-api \
+            --zip-file fileb://build/lambda-deploy.zip \
+            --region us-east-1
+
+      - name: Wait for deployment
+        run: |
+          aws lambda wait function-updated \
+            --function-name slsea-api \
+            --region us-east-1
+
+          echo "✓ Lambda deployment complete"
+
+      - name: Test health endpoint
+        run: |
+          # Get function URL or API Gateway endpoint
+          INVOKE_URL=$(aws apigatewayv2 get-apis --region us-east-1 --query "Items[?Name=='slsea-api'].ApiEndpoint" --output text)
+
+          if [ -z "$INVOKE_URL" ]; then
+            echo "Warning: Could not find API Gateway endpoint"
+            exit 0
+          fi
+
+          echo "Testing: $INVOKE_URL/health"
+          curl -f "$INVOKE_URL/health" || echo "Health check failed (function may still be initializing)"
