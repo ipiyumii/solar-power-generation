@@ -10,10 +10,11 @@ const notFound = require('./middleware/notFound');
 
 const app = express();
 
-// Behind App Runner's proxy every request arrives from the platform address.
-// Without this, all clients share one rate-limit bucket. The value is 1, not
-// true: true trusts the whole X-Forwarded-For chain, which a client can
-// prepend to
+// Behind API Gateway every request reaches the function from the platform, so
+// without this all clients would share one rate-limit bucket. The value is 1,
+// not true: true trusts the whole X-Forwarded-For chain, which a client can
+// prepend to. API Gateway appends the real caller as the last hop, which is
+// the one hop this setting reads.
 app.set('trust proxy', 1);
 
 // One ETag owner. utils/etag.js becomes the only producer in session A6;
