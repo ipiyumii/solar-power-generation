@@ -28,7 +28,7 @@ jobs:
 
           # Copy only necessary files
           cp -r app.js index.js lambda.js config/ db/ middleware/ utils/ build/lambda/
-          cp package.json build/lambda/
+          cp package.json package-lock.json build/lambda/
 
           # Verify critical file exists
           if [ ! -f build/lambda/db/rds-ca-bundle.pem ]; then
