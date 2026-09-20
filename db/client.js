@@ -20,6 +20,12 @@ function sslOptions() {
   return { ca: fs.readFileSync(CA_BUNDLE), rejectUnauthorized: true };
 }
 
+// Under Lambda the pool is per container, not per service: every warm
+// container holds its own. Reserved concurrency 10 x a cap of 2 bounds the
+// estate at 20 connections against db.t4g.micro's ~60. As a long-running
+// server there is one process, so one pool of 10 is the right shape.
+const isLambda = Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+
 const pool = mysql.createPool({
   host: env.DB_HOST,
   port: env.DB_PORT,
@@ -30,9 +36,15 @@ const pool = mysql.createPool({
 
   // db.t4g.micro allows ~60 connections. One instance at 10 leaves headroom
   // for a seeding session and an interactive client
-  connectionLimit: 10,
+  connectionLimit: isLambda ? 2 : 10,
   waitForConnections: true,
   queueLimit: 0,
+
+  // A frozen Lambda container can wake holding a connection RDS has already
+  // dropped. Keepalives do not run while frozen, so this narrows the window
+ 
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
 
   timezone: 'Z', // DATETIME columns are stored in UTC
   decimalNumbers: true, // DECIMAL as number, not string
