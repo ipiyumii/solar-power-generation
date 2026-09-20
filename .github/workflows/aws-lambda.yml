@@ -73,13 +73,7 @@ jobs:
 
       - name: Test health endpoint
         run: |
-          # Get function URL or API Gateway endpoint
-          INVOKE_URL=$(aws apigatewayv2 get-apis --region us-east-1 --query "Items[?Name=='slsea-api'].ApiEndpoint" --output text)
-
-          if [ -z "$INVOKE_URL" ]; then
-            echo "Warning: Could not find API Gateway endpoint"
-            exit 0
-          fi
+          INVOKE_URL="https://4qfu2ftwie.execute-api.us-east-1.amazonaws.com"
 
           echo "Testing: $INVOKE_URL/health"
-          curl -f "$INVOKE_URL/health" || echo "Health check failed (function may still be initializing)"
+          curl -f "$INVOKE_URL/health" && echo "✓ Health check passed" || echo "⚠ Health check failed (function may still be initializing)"
