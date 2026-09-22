@@ -4,10 +4,10 @@ const ApiError = require('../utils/ApiError');
 const districtsRepo = require('../repositories/districts');
 const provincesRepo = require('../repositories/provinces');
 
-async function listDistricts(limit, offset) {
+async function listDistricts(limit, offset, scope) {
   const [districts, total] = await Promise.all([
-    districtsRepo.findAll(limit, offset),
-    districtsRepo.countAll(),
+    districtsRepo.findAll(limit, offset, scope),
+    districtsRepo.countAll(scope),
   ]);
 
   return {
@@ -18,15 +18,12 @@ async function listDistricts(limit, offset) {
   };
 }
 
-async function getDistrictById(id) {
-  const district = await districtsRepo.findById(id);
+async function getDistrictById(id, scope) {
+  const district = await districtsRepo.findById(id, scope);
 
   if (!district) {
     throw ApiError.notFound('DISTRICT_NOT_FOUND', `District ${id} not found.`);
   }
-
-  // Verify province exists
-  await provincesRepo.findById(district.province_id);
 
   return district;
 }

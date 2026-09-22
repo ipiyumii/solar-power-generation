@@ -3,10 +3,10 @@
 const ApiError = require('../utils/ApiError');
 const provincesRepo = require('../repositories/provinces');
 
-async function listProvinces(limit, offset) {
+async function listProvinces(limit, offset, scope) {
   const [provinces, total] = await Promise.all([
-    provincesRepo.findAll(limit, offset),
-    provincesRepo.countAll(),
+    provincesRepo.findAll(limit, offset, scope),
+    provincesRepo.countAll(scope),
   ]);
 
   return {
@@ -17,8 +17,8 @@ async function listProvinces(limit, offset) {
   };
 }
 
-async function getProvinceById(id) {
-  const province = await provincesRepo.findById(id);
+async function getProvinceById(id, scope) {
+  const province = await provincesRepo.findById(id, scope);
 
   if (!province) {
     throw ApiError.notFound('PROVINCE_NOT_FOUND', `Province ${id} not found.`);
