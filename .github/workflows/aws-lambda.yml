@@ -20,7 +20,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci --omit=dev --no-audit --no-fund
+        run: npm install --omit=dev --no-audit --no-fund
 
       - name: Create Lambda deployment package
         run: |
@@ -38,7 +38,7 @@ jobs:
 
           # Install production dependencies fresh into staging
           cd build/lambda
-          npm ci --omit=dev --no-audit --no-fund
+          npm install --omit=dev --no-audit --no-fund
 
           # Create zip
           cd ..
