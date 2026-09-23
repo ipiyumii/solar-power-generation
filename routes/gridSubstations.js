@@ -3,9 +3,12 @@
 const express = require('express');
 const ApiError = require('../utils/ApiError');
 const { paginationSchema } = require('../utils/schemas');
+const requireScope = require('../middleware/requireScope');
 const gridSubstationsService = require('../services/gridSubstations');
 
 const router = express.Router();
+
+router.use(requireScope('installations:read'));
 
 // GET /grid-substations
 router.get('/', async (req, res, next) => {

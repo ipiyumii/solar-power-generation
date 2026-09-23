@@ -3,9 +3,12 @@
 const express = require('express');
 const ApiError = require('../utils/ApiError');
 const { paginationSchema } = require('../utils/schemas');
+const requireScope = require('../middleware/requireScope');
 const provincesService = require('../services/provinces');
 
 const router = express.Router();
+
+router.use(requireScope('installations:read'));
 
 // GET /provinces
 router.get('/', async (req, res, next) => {

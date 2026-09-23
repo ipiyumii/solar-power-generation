@@ -5,6 +5,8 @@ const express = require('express');
 
 const env = require('./config/env');
 const db = require('./db/client');
+const authenticate = require('./middleware/authenticate');
+const jurisdiction = require('./middleware/jurisdiction');
 const errorHandler = require('./middleware/errorHandler');
 const notFound = require('./middleware/notFound');
 
@@ -58,7 +60,13 @@ const districtsRouter = require('./routes/districts');
 const gridSubstationsRouter = require('./routes/gridSubstations');
 const installationsRouter = require('./routes/installations');
 
+// Authentication endpoints (public).
 app.use('/api/v1/auth', authRouter);
+
+// Protected endpoints: require authentication and jurisdiction scoping.
+app.use('/api/v1', authenticate);
+app.use('/api/v1', jurisdiction);
+
 app.use('/api/v1/provinces', provincesRouter);
 app.use('/api/v1/districts', districtsRouter);
 app.use('/api/v1/grid-substations', gridSubstationsRouter);
