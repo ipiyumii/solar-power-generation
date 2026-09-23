@@ -14,7 +14,7 @@ router.use(requireScope('installations:read'));
 router.get('/', async (req, res, next) => {
   try {
     const query = paginationSchema.parse(req.query);
-    const result = await installationsService.listInstallations(query.limit, query.offset, req.scope);
+    const result = await installationsService.listInstallations(query.limit, query.offset, req.scope, query.sort);
     res.json(result);
   } catch (err) {
     if (err.name === 'ZodError') {

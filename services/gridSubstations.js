@@ -1,11 +1,22 @@
 'use strict';
 
 const ApiError = require('../utils/ApiError');
+const { parseSort } = require('../utils/sortParser');
 const gridSubstationsRepo = require('../repositories/gridSubstations');
 
-async function listGridSubstations(limit, offset, scope) {
+async function listGridSubstations(limit, offset, scope, sortParam = null) {
+  let sort = null;
+
+  if (sortParam) {
+    try {
+      sort = parseSort(sortParam, 'gridSubstations');
+    } catch (err) {
+      throw ApiError.badRequest('INVALID_SORT', err.message);
+    }
+  }
+
   const [substations, total] = await Promise.all([
-    gridSubstationsRepo.findAll(limit, offset, scope),
+    gridSubstationsRepo.findAll(limit, offset, scope, sort),
     gridSubstationsRepo.countAll(scope),
   ]);
 
@@ -14,6 +25,7 @@ async function listGridSubstations(limit, offset, scope) {
     total,
     limit,
     offset,
+    sort: sortParam || undefined,
   };
 }
 

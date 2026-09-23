@@ -3,9 +3,15 @@
 const { pool } = require('../db/client');
 const { scopePredicate } = require('./_scoped');
 
-async function findAll(limit, offset, scope) {
+async function findAll(limit, offset, scope, sort = null) {
   const { where, params } = scopePredicate(scope);
   const whereClause = where ? `WHERE ${where}` : '';
+  let orderClause = 'ORDER BY installation_id ASC';
+
+  if (sort) {
+    orderClause = `ORDER BY ${sort.field} ${sort.direction}, installation_id ASC`;
+  }
+
   const [rows] = await pool.execute(
     `SELECT
        installation_id,
@@ -26,7 +32,7 @@ async function findAll(limit, offset, scope) {
        updated_at
      FROM installations
      ${whereClause}
-     ORDER BY installation_id ASC
+     ${orderClause}
      LIMIT ? OFFSET ?`,
     [...params, limit, offset]
   );
