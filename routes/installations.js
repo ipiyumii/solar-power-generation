@@ -2,16 +2,15 @@
 
 const express = require('express');
 const ApiError = require('../utils/ApiError');
-const { paginationSchema } = require('../utils/schemas');
+const { paginationSchema, createInstallationSchema, updateInstallationSchema } = require('../utils/schemas');
 const requireScope = require('../middleware/requireScope');
+const requirePrincipal = require('../middleware/requirePrincipal');
 const installationsService = require('../services/installations');
 
 const router = express.Router();
 
-router.use(requireScope('installations:read'));
-
-// GET /installations
-router.get('/', async (req, res, next) => {
+// Read operations
+router.get('/', requireScope('installations:read'), async (req, res, next) => {
   try {
     const query = paginationSchema.parse(req.query);
     const filters = {
@@ -31,8 +30,7 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-// GET /installations/:id
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', requireScope('installations:read'), async (req, res, next) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
@@ -41,6 +39,37 @@ router.get('/:id', async (req, res, next) => {
     const installation = await installationsService.getInstallationById(id, req.scope);
     res.json(installation);
   } catch (err) {
+    next(err);
+  }
+});
+
+// Write operations
+router.post('/', requirePrincipal('user'), requireScope('installations:write'), async (req, res, next) => {
+  try {
+    const data = createInstallationSchema.parse(req.body);
+    const installation = await installationsService.createInstallation(data);
+    res.status(201).json(installation);
+  } catch (err) {
+    if (err.name === 'ZodError') {
+      return next(ApiError.badRequest('INVALID_REQUEST', 'Invalid request body.', err.errors));
+    }
+    next(err);
+  }
+});
+
+router.put('/:id', requirePrincipal('user'), requireScope('installations:write'), async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return next(ApiError.badRequest('INVALID_ID', 'Installation ID must be an integer.'));
+    }
+    const data = updateInstallationSchema.parse(req.body);
+    const installation = await installationsService.updateInstallation(id, req.scope, data);
+    res.json(installation);
+  } catch (err) {
+    if (err.name === 'ZodError') {
+      return next(ApiError.badRequest('INVALID_REQUEST', 'Invalid request body.', err.errors));
+    }
     next(err);
   }
 });
