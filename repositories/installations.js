@@ -192,6 +192,86 @@ async function findDeviceSecretByMeterId(meterId) {
   return rows.length > 0 ? rows[0] : null;
 }
 
+async function create(data, deviceSecretHash) {
+  const [result] = await pool.execute(
+    `INSERT INTO installations
+       (reference, meter_id, inverter_id, device_secret_hash, capacity_kw, panel_count, status, commissioned_on, address_line, latitude, longitude, substation_id, district_id, province_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      data.reference,
+      data.meter_id,
+      data.inverter_id,
+      deviceSecretHash,
+      data.capacity_kw,
+      data.panel_count,
+      data.status,
+      data.commissioned_on,
+      data.address_line,
+      data.latitude,
+      data.longitude,
+      data.substation_id,
+      data.district_id,
+      data.province_id,
+    ]
+  );
+  return result.insertId;
+}
+
+async function update(id, scope, data) {
+  const fields = [];
+  const params = [];
+
+  if (data.reference !== undefined) {
+    fields.push('reference = ?');
+    params.push(data.reference);
+  }
+  if (data.capacity_kw !== undefined) {
+    fields.push('capacity_kw = ?');
+    params.push(data.capacity_kw);
+  }
+  if (data.panel_count !== undefined) {
+    fields.push('panel_count = ?');
+    params.push(data.panel_count);
+  }
+  if (data.status !== undefined) {
+    fields.push('status = ?');
+    params.push(data.status);
+  }
+  if (data.commissioned_on !== undefined) {
+    fields.push('commissioned_on = ?');
+    params.push(data.commissioned_on);
+  }
+  if (data.address_line !== undefined) {
+    fields.push('address_line = ?');
+    params.push(data.address_line);
+  }
+  if (data.latitude !== undefined) {
+    fields.push('latitude = ?');
+    params.push(data.latitude);
+  }
+  if (data.longitude !== undefined) {
+    fields.push('longitude = ?');
+    params.push(data.longitude);
+  }
+
+  if (fields.length === 0) {
+    return false;
+  }
+
+  const { where, params: scopeParams } = scopePredicate(scope);
+  const whereClause = where ? `AND ${where}` : '';
+
+  const [result] = await pool.execute(
+    `UPDATE installations
+     SET ${fields.join(', ')}
+     WHERE installation_id = ?
+     ${whereClause}`,
+    [...params, id, ...scopeParams]
+  );
+
+  return result.affectedRows > 0;
+}
+
 module.exports = {
   findAll,
   countAll,
@@ -199,4 +279,6 @@ module.exports = {
   findByDistrictId,
   findBySubstationId,
   findDeviceSecretByMeterId,
+  create,
+  update,
 };

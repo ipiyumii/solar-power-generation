@@ -18,8 +18,35 @@ const createReadingSchema = z.object({
   voltage_v: z.coerce.number().positive('voltage_v must be positive'),
 }).strict();
 
+const createInstallationSchema = z.object({
+  reference: z.string().min(1).max(32, 'reference must be at most 32 characters'),
+  meter_id: z.string().min(1).max(32, 'meter_id must be at most 32 characters'),
+  inverter_id: z.string().min(1).max(48, 'inverter_id must be at most 48 characters'),
+  capacity_kw: z.coerce.number().positive('capacity_kw must be positive'),
+  panel_count: z.coerce.number().int().positive('panel_count must be a positive integer'),
+  status: z.enum(['active', 'inactive', 'decommissioned']).default('active'),
+  commissioned_on: z.string().date('commissioned_on must be YYYY-MM-DD format'),
+  address_line: z.string().min(1).max(160, 'address_line must be at most 160 characters'),
+  latitude: z.coerce.number().min(-90).max(90, 'latitude must be between -90 and 90'),
+  longitude: z.coerce.number().min(-180).max(180, 'longitude must be between -180 and 180'),
+  substation_id: z.coerce.number().int().positive('substation_id must be a positive integer'),
+}).strict();
+
+const updateInstallationSchema = z.object({
+  reference: z.string().min(1).max(32, 'reference must be at most 32 characters').optional(),
+  capacity_kw: z.coerce.number().positive('capacity_kw must be positive').optional(),
+  panel_count: z.coerce.number().int().positive('panel_count must be a positive integer').optional(),
+  status: z.enum(['active', 'inactive', 'decommissioned']).optional(),
+  commissioned_on: z.string().date('commissioned_on must be YYYY-MM-DD format').optional(),
+  address_line: z.string().min(1).max(160, 'address_line must be at most 160 characters').optional(),
+  latitude: z.coerce.number().min(-90).max(90, 'latitude must be between -90 and 90').optional(),
+  longitude: z.coerce.number().min(-180).max(180, 'longitude must be between -180 and 180').optional(),
+}).strict();
+
 module.exports = {
   paginationSchema,
   sortParamSchema,
   createReadingSchema,
+  createInstallationSchema,
+  updateInstallationSchema,
 };
