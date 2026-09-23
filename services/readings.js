@@ -50,7 +50,25 @@ async function getReadingById(id, scope) {
   return reading;
 }
 
+async function createReading(payload, scope) {
+  const reading = await readingsRepo.create(
+    payload.installation_id,
+    payload.recorded_at,
+    payload.power_kw,
+    payload.energy_kwh,
+    payload.voltage_v,
+    scope
+  );
+
+  if (!reading) {
+    throw ApiError.badRequest('INSTALLATION_NOT_FOUND', 'Installation not found or outside scope.');
+  }
+
+  return reading;
+}
+
 module.exports = {
   listReadings,
   getReadingById,
+  createReading,
 };

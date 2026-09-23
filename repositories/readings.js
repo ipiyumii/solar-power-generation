@@ -99,8 +99,70 @@ async function findById(id, scope) {
   return rows.length > 0 ? rows[0] : null;
 }
 
+async function create(installationId, recordedAt, powerKw, energyKwh, voltageV, scope) {
+  const { where: scopeWhere, params: scopeParams } = scopePredicate(scope);
+  const scopeCheck = scopeWhere ? `AND ${scopeWhere}` : '';
+
+  const [installation] = await pool.execute(
+    `SELECT substation_id, district_id, province_id
+     FROM installations
+     WHERE installation_id = ?
+     ${scopeCheck}`,
+    [installationId, ...scopeParams]
+  );
+
+  if (installation.length === 0) {
+    return null;
+  }
+
+  const inst = installation[0];
+  const [result] = await pool.execute(
+    `INSERT INTO readings (
+      installation_id,
+      recorded_at,
+      ingested_at,
+      power_kw,
+      energy_kwh,
+      voltage_v,
+      substation_id,
+      district_id,
+      province_id
+    ) VALUES (?, ?, NOW(), ?, ?, ?, ?, ?, ?)`,
+    [
+      installationId,
+      recordedAt,
+      powerKw,
+      energyKwh,
+      voltageV,
+      inst.substation_id,
+      inst.district_id,
+      inst.province_id,
+    ]
+  );
+
+  const [rows] = await pool.execute(
+    `SELECT
+       reading_id,
+       installation_id,
+       recorded_at,
+       ingested_at,
+       power_kw,
+       energy_kwh,
+       voltage_v,
+       substation_id,
+       district_id,
+       province_id
+     FROM readings
+     WHERE reading_id = ?`,
+    [result.insertId]
+  );
+
+  return rows.length > 0 ? rows[0] : null;
+}
+
 module.exports = {
   findAll,
   countAll,
   findById,
+  create,
 };
