@@ -14,14 +14,7 @@ router.use(requireScope('installations:read'));
 router.get('/', async (req, res, next) => {
   try {
     const query = paginationSchema.parse(req.query);
-    const filters = {
-      province_id: query.province_id,
-      district_id: query.district_id,
-      substation_id: query.substation_id,
-      status: query.status,
-    };
-    const activeFilters = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== undefined));
-    const result = await installationsService.listInstallations(query.limit, query.offset, req.scope, query.sort, Object.keys(activeFilters).length > 0 ? activeFilters : null);
+    const result = await installationsService.listInstallations(query.limit, query.offset, req.scope, query.sort);
     res.json(result);
   } catch (err) {
     if (err.name === 'ZodError') {

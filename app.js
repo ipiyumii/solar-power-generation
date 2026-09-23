@@ -59,7 +59,6 @@ const provincesRouter = require('./routes/provinces');
 const districtsRouter = require('./routes/districts');
 const gridSubstationsRouter = require('./routes/gridSubstations');
 const installationsRouter = require('./routes/installations');
-const readingsRouter = require('./routes/readings');
 
 // Authentication endpoints (public).
 app.use('/api/v1/auth', authRouter);
@@ -72,7 +71,6 @@ app.use('/api/v1/provinces', provincesRouter);
 app.use('/api/v1/districts', districtsRouter);
 app.use('/api/v1/grid-substations', gridSubstationsRouter);
 app.use('/api/v1/installations', installationsRouter);
-app.use('/api/v1/readings', readingsRouter);
 
 app.use(notFound);
 app.use(errorHandler);

@@ -3,51 +3,14 @@
 const { pool } = require('../db/client');
 const { scopePredicate } = require('./_scoped');
 
-function buildFilterClause(filters) {
-  if (!filters) return { where: '', params: [] };
-
-  const conditions = [];
-  const params = [];
-
-  if (filters.province_id) {
-    conditions.push('province_id = ?');
-    params.push(filters.province_id);
-  }
-  if (filters.district_id) {
-    conditions.push('district_id = ?');
-    params.push(filters.district_id);
-  }
-  if (filters.substation_id) {
-    conditions.push('substation_id = ?');
-    params.push(filters.substation_id);
-  }
-  if (filters.status) {
-    conditions.push('status = ?');
-    params.push(filters.status);
-  }
-
-  return {
-    where: conditions.length > 0 ? conditions.join(' AND ') : '',
-    params,
-  };
-}
-
-async function findAll(limit, offset, scope, sort = null, filters = null) {
-  const { where: scopeWhere, params: scopeParams } = scopePredicate(scope);
-  const { where: filterWhere, params: filterParams } = buildFilterClause(filters);
-
-  const conditions = [];
-  if (scopeWhere) conditions.push(scopeWhere);
-  if (filterWhere) conditions.push(filterWhere);
-
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+async function findAll(limit, offset, scope, sort = null) {
+  const { where, params } = scopePredicate(scope);
+  const whereClause = where ? `WHERE ${where}` : '';
   let orderClause = 'ORDER BY installation_id ASC';
 
   if (sort) {
     orderClause = `ORDER BY ${sort.field} ${sort.direction}, installation_id ASC`;
   }
-
-  const allParams = [...scopeParams, ...filterParams, limit, offset];
 
   const [rows] = await pool.execute(
     `SELECT
@@ -71,7 +34,7 @@ async function findAll(limit, offset, scope, sort = null, filters = null) {
      ${whereClause}
      ${orderClause}
      LIMIT ? OFFSET ?`,
-    allParams
+    [...params, limit, offset]
   );
   return rows;
 }
