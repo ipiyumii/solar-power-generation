@@ -11,7 +11,7 @@ const router = express.Router();
 router.get('/', async (req, res, next) => {
   try {
     const query = paginationSchema.parse(req.query);
-    const result = await gridSubstationsService.listGridSubstations(query.limit, query.offset);
+    const result = await gridSubstationsService.listGridSubstations(query.limit, query.offset, req.scope);
     res.json(result);
   } catch (err) {
     if (err.name === 'ZodError') {
@@ -28,7 +28,7 @@ router.get('/:id', async (req, res, next) => {
     if (isNaN(id)) {
       return next(ApiError.badRequest('INVALID_ID', 'Substation ID must be an integer.'));
     }
-    const substation = await gridSubstationsService.getGridSubstationById(id);
+    const substation = await gridSubstationsService.getGridSubstationById(id, req.scope);
     res.json(substation);
   } catch (err) {
     next(err);

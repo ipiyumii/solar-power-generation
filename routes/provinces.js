@@ -11,7 +11,7 @@ const router = express.Router();
 router.get('/', async (req, res, next) => {
   try {
     const query = paginationSchema.parse(req.query);
-    const result = await provincesService.listProvinces(query.limit, query.offset);
+    const result = await provincesService.listProvinces(query.limit, query.offset, req.scope);
     res.json(result);
   } catch (err) {
     if (err.name === 'ZodError') {
@@ -28,7 +28,7 @@ router.get('/:id', async (req, res, next) => {
     if (isNaN(id)) {
       return next(ApiError.badRequest('INVALID_ID', 'Province ID must be an integer.'));
     }
-    const province = await provincesService.getProvinceById(id);
+    const province = await provincesService.getProvinceById(id, req.scope);
     res.json(province);
   } catch (err) {
     next(err);
