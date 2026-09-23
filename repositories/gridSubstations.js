@@ -1,8 +1,11 @@
 'use strict';
 
 const { pool } = require('../db/client');
+const { scopePredicate } = require('./_scoped');
 
-async function findAll(limit, offset) {
+async function findAll(limit, offset, scope) {
+  const { where, params } = scopePredicate(scope);
+  const whereClause = where ? `WHERE ${where}` : '';
   const [rows] = await pool.execute(
     `SELECT
        substation_id,
@@ -17,21 +20,27 @@ async function findAll(limit, offset) {
        created_at,
        updated_at
      FROM grid_substations
+     ${whereClause}
      ORDER BY substation_id ASC
      LIMIT ? OFFSET ?`,
-    [limit, offset]
+    [...params, limit, offset]
   );
   return rows;
 }
 
-async function countAll() {
+async function countAll(scope) {
+  const { where, params } = scopePredicate(scope);
+  const whereClause = where ? `WHERE ${where}` : '';
   const [[{ count }]] = await pool.execute(
-    `SELECT COUNT(*) as count FROM grid_substations`
+    `SELECT COUNT(*) as count FROM grid_substations ${whereClause}`,
+    params
   );
   return count;
 }
 
-async function findById(id) {
+async function findById(id, scope) {
+  const { where, params } = scopePredicate(scope);
+  const whereClause = where ? `AND ${where}` : '';
   const [rows] = await pool.execute(
     `SELECT
        substation_id,
@@ -46,13 +55,16 @@ async function findById(id) {
        created_at,
        updated_at
      FROM grid_substations
-     WHERE substation_id = ?`,
-    [id]
+     WHERE substation_id = ?
+     ${whereClause}`,
+    [id, ...params]
   );
   return rows.length > 0 ? rows[0] : null;
 }
 
-async function findByDistrictId(districtId) {
+async function findByDistrictId(districtId, scope) {
+  const { where, params } = scopePredicate(scope);
+  const whereClause = where ? `AND ${where}` : '';
   const [rows] = await pool.execute(
     `SELECT
        substation_id,
@@ -68,8 +80,9 @@ async function findByDistrictId(districtId) {
        updated_at
      FROM grid_substations
      WHERE district_id = ?
+     ${whereClause}
      ORDER BY substation_id ASC`,
-    [districtId]
+    [districtId, ...params]
   );
   return rows;
 }

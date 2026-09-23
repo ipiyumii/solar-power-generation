@@ -3,15 +3,18 @@
 const express = require('express');
 const ApiError = require('../utils/ApiError');
 const { paginationSchema } = require('../utils/schemas');
+const requireScope = require('../middleware/requireScope');
 const installationsService = require('../services/installations');
 
 const router = express.Router();
+
+router.use(requireScope('installations:read'));
 
 // GET /installations
 router.get('/', async (req, res, next) => {
   try {
     const query = paginationSchema.parse(req.query);
-    const result = await installationsService.listInstallations(query.limit, query.offset);
+    const result = await installationsService.listInstallations(query.limit, query.offset, req.scope);
     res.json(result);
   } catch (err) {
     if (err.name === 'ZodError') {
@@ -28,7 +31,7 @@ router.get('/:id', async (req, res, next) => {
     if (isNaN(id)) {
       return next(ApiError.badRequest('INVALID_ID', 'Installation ID must be an integer.'));
     }
-    const installation = await installationsService.getInstallationById(id);
+    const installation = await installationsService.getInstallationById(id, req.scope);
     res.json(installation);
   } catch (err) {
     next(err);
