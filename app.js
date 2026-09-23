@@ -52,11 +52,13 @@ app.get('/health', async (_req, res) => {
 });
 
 // Routers.
+const authRouter = require('./routes/auth');
 const provincesRouter = require('./routes/provinces');
 const districtsRouter = require('./routes/districts');
 const gridSubstationsRouter = require('./routes/gridSubstations');
 const installationsRouter = require('./routes/installations');
 
+app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/provinces', provincesRouter);
 app.use('/api/v1/districts', districtsRouter);
 app.use('/api/v1/grid-substations', gridSubstationsRouter);
