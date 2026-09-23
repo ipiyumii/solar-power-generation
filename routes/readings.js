@@ -4,24 +4,23 @@ const express = require('express');
 const ApiError = require('../utils/ApiError');
 const { paginationSchema } = require('../utils/schemas');
 const requireScope = require('../middleware/requireScope');
-const installationsService = require('../services/installations');
+const readingsService = require('../services/readings');
 
 const router = express.Router();
 
-router.use(requireScope('installations:read'));
+router.use(requireScope('readings:read'));
 
-// GET /installations
+// GET /readings
 router.get('/', async (req, res, next) => {
   try {
     const query = paginationSchema.parse(req.query);
     const filters = {
-      province_id: query.province_id,
-      district_id: query.district_id,
-      substation_id: query.substation_id,
-      status: query.status,
+      installation_id: query.installation_id,
+      recorded_at_start: query.recorded_at_start,
+      recorded_at_end: query.recorded_at_end,
     };
     const activeFilters = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== undefined));
-    const result = await installationsService.listInstallations(query.limit, query.offset, req.scope, query.sort, Object.keys(activeFilters).length > 0 ? activeFilters : null);
+    const result = await readingsService.listReadings(query.limit, query.offset, req.scope, query.sort, Object.keys(activeFilters).length > 0 ? activeFilters : null);
     res.json(result);
   } catch (err) {
     if (err.name === 'ZodError') {
@@ -31,15 +30,15 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-// GET /installations/:id
+// GET /readings/:id
 router.get('/:id', async (req, res, next) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
-      return next(ApiError.badRequest('INVALID_ID', 'Installation ID must be an integer.'));
+      return next(ApiError.badRequest('INVALID_ID', 'Reading ID must be an integer.'));
     }
-    const installation = await installationsService.getInstallationById(id, req.scope);
-    res.json(installation);
+    const reading = await readingsService.getReadingById(id, req.scope);
+    res.json(reading);
   } catch (err) {
     next(err);
   }
