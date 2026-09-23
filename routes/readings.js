@@ -2,11 +2,26 @@
 
 const express = require('express');
 const ApiError = require('../utils/ApiError');
-const { paginationSchema } = require('../utils/schemas');
+const { paginationSchema, createReadingSchema } = require('../utils/schemas');
 const requireScope = require('../middleware/requireScope');
+const requireDevice = require('../middleware/requireDevice');
 const readingsService = require('../services/readings');
 
 const router = express.Router();
+
+// POST /readings - device only
+router.post('/', requireDevice, async (req, res, next) => {
+  try {
+    const payload = createReadingSchema.parse(req.body);
+    const reading = await readingsService.createReading(payload, req.scope);
+    res.status(201).json(reading);
+  } catch (err) {
+    if (err.name === 'ZodError') {
+      return next(ApiError.badRequest('INVALID_READING', 'Invalid reading data.', err.errors));
+    }
+    next(err);
+  }
+});
 
 router.use(requireScope('readings:read'));
 
