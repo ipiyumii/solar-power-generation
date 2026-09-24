@@ -19,30 +19,35 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Install dependencies
-        run: npm install --omit=dev --no-audit --no-fund
-
       - name: Create Lambda deployment package
         run: |
+          set -euo pipefail
           mkdir -p build/lambda
 
-          # Copy only necessary files
-          cp -r app.js index.js lambda.js config/ db/ middleware/ utils/ build/lambda/
-          cp package.json package-lock.json build/lambda/
+          cp -r app.js index.js lambda.js package.json package-lock.json \
+                config/ db/ middleware/ utils/ routes/ services/ repositories/ \
+                build/lambda/
 
-          # Verify critical file exists
           if [ ! -f build/lambda/db/rds-ca-bundle.pem ]; then
             echo "ERROR: db/rds-ca-bundle.pem is missing"
             exit 1
           fi
 
-          # Install production dependencies fresh into staging
           cd build/lambda
           npm install --omit=dev --no-audit --no-fund
 
-          # Create zip
+          # Load the handler exactly as Lambda will, from the staged package, so a
+          # missing module fails the build instead of the deployed function.
+          # The pool connects lazily, so dummy DB values are enough.
+          NODE_ENV=test DB_HOST=localhost DB_NAME=x DB_USER=x DB_PASSWORD=x \
+          PUBLIC_BASE_URL=https://example.invalid \
+            node -e "require('./lambda.js').handler || process.exit(1)"
+
+          # Zip the contents, not the folder: handler lambda.handler resolves
+          # lambda.js at the archive root.
+          zip -qr ../lambda-deploy.zip .
           cd ..
-          zip -r lambda-deploy.zip lambda/
+          unzip -l lambda-deploy.zip lambda.js > /dev/null || { echo "lambda.js not at zip root"; exit 1; }
 
           echo "Package size: $(du -h lambda-deploy.zip | cut -f1)"
 
@@ -53,8 +58,15 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Verify AWS credentials
-        run: aws sts get-caller-identity
+      - name: Refuse work AWS accounts
+        run: |
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          echo "Deploying to account $ACCOUNT"
+          case "$ACCOUNT" in
+            571832387503|500345896497|955682923759)
+              echo "ERROR: $ACCOUNT is a work account; coursework deploys only to the personal account"
+              exit 1 ;;
+          esac
 
       - name: Deploy Lambda function code
         run: |
@@ -76,4 +88,7 @@ jobs:
           INVOKE_URL="https://4qfu2ftwie.execute-api.us-east-1.amazonaws.com"
 
           echo "Testing: $INVOKE_URL/health"
-          curl -f "$INVOKE_URL/health" && echo "✓ Health check passed" || echo "⚠ Health check failed (function may still be initializing)"
+          # Retries absorb a cold start; a failure after that fails the job.
+          curl -fsS --retry 5 --retry-delay 5 --retry-all-errors "$INVOKE_URL/health"
+          echo
+          echo "✓ Health check passed"

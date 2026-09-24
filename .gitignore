@@ -14,3 +14,12 @@ Thumbs.db
 
 # Editor
 .vscode/
+
+# Build output
+build/
+
+# Local test artefacts: generate-tokens.js holds a literal signing secret
+generate-tokens.js
+test-endpoints*
+FINAL_TEST_REPORT.md
+TEST_SUMMARY.md
