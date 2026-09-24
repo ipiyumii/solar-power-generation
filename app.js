@@ -7,6 +7,7 @@ const env = require('./config/env');
 const db = require('./db/client');
 const authenticate = require('./middleware/authenticate');
 const jurisdiction = require('./middleware/jurisdiction');
+const etagHandler = require('./middleware/etagHandler');
 const errorHandler = require('./middleware/errorHandler');
 const notFound = require('./middleware/notFound');
 
@@ -67,6 +68,7 @@ app.use('/api/v1/auth', authRouter);
 // Protected endpoints: require authentication and jurisdiction scoping.
 app.use('/api/v1', authenticate);
 app.use('/api/v1', jurisdiction);
+app.use('/api/v1', etagHandler);
 
 app.use('/api/v1/provinces', provincesRouter);
 app.use('/api/v1/districts', districtsRouter);
