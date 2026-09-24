@@ -1,9 +1,9 @@
 'use strict';
 
 const express = require('express');
-const ApiError = require('../utils/ApiError');
-const { paginationSchema } = require('../utils/schemas');
+const validate = require('../middleware/validate');
 const requireScope = require('../middleware/requireScope');
+const { idParams, emptyQuery, listQuery, districtsQuery } = require('../utils/schemas');
 const districtsService = require('../services/districts');
 
 const router = express.Router();
@@ -11,45 +11,25 @@ const router = express.Router();
 router.use(requireScope('installations:read'));
 
 // GET /districts
-router.get('/', async (req, res, next) => {
-  try {
-    const query = paginationSchema.parse(req.query);
-    const result = await districtsService.listDistricts(query.limit, query.offset, req.scope, query.sort);
-    res.json(result);
-  } catch (err) {
-    if (err.name === 'ZodError') {
-      return next(ApiError.badRequest('INVALID_QUERY', 'Invalid query parameters.', err.errors));
-    }
-    next(err);
-  }
-});
-
-// GET /districts/:id/generation-summary
-router.get('/:id/generation-summary', async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-      return next(ApiError.badRequest('INVALID_ID', 'District ID must be an integer.'));
-    }
-    const summary = await districtsService.getGenerationSummary(id, req.scope);
-    res.json(summary);
-  } catch (err) {
-    next(err);
-  }
+router.get('/', validate(districtsQuery, 'query'), async (req, res) => {
+  const { limit, offset, sort, province_id } = req.validated.query;
+  res.json(await districtsService.listDistricts(limit, offset, req.scope, sort, { province_id }));
 });
 
 // GET /districts/:id
-router.get('/:id', async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-      return next(ApiError.badRequest('INVALID_ID', 'District ID must be an integer.'));
-    }
-    const district = await districtsService.getDistrictById(id, req.scope);
-    res.json(district);
-  } catch (err) {
-    next(err);
-  }
+router.get('/:id', validate(idParams, 'params'), validate(emptyQuery, 'query'), async (req, res) => {
+  res.json(await districtsService.getDistrictById(req.validated.params.id, req.scope));
+});
+
+// GET /districts/:id/grid-substations
+router.get('/:id/grid-substations', validate(idParams, 'params'), validate(listQuery, 'query'), async (req, res) => {
+  const { limit, offset, sort } = req.validated.query;
+  res.json(await districtsService.listDistrictSubstations(req.validated.params.id, limit, offset, req.scope, sort));
+});
+
+// GET /districts/:id/generation-summary
+router.get('/:id/generation-summary', validate(idParams, 'params'), validate(emptyQuery, 'query'), async (req, res) => {
+  res.json(await districtsService.getGenerationSummary(req.validated.params.id, req.scope));
 });
 
 module.exports = router;

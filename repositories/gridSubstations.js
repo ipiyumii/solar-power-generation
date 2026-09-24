@@ -1,101 +1,51 @@
 'use strict';
 
 const { pool } = require('../db/client');
-const { scopePredicate } = require('./_scoped');
+const { scopePredicate, equalityFilters, whereClause } = require('./_scoped');
 
-async function findAll(limit, offset, scope, sort = null) {
-  const { where, params } = scopePredicate(scope);
-  const whereClause = where ? `WHERE ${where}` : '';
-  let orderClause = 'ORDER BY substation_id ASC';
+const COLUMNS = `substation_id, district_id, province_id, name, code, capacity_mva,
+       voltage_level_kv, latitude, longitude, created_at, updated_at`;
+const FILTERABLE = ['province_id', 'district_id'];
 
-  if (sort) {
-    orderClause = `ORDER BY ${sort.field} ${sort.direction}, substation_id ASC`;
-  }
+async function findAll(limit, offset, scope, sort = null, filters = null) {
+  const where = whereClause(equalityFilters(filters, FILTERABLE), scopePredicate(scope));
+  const orderClause = sort
+    ? `ORDER BY ${sort.field} ${sort.direction}, substation_id ASC`
+    : 'ORDER BY substation_id ASC';
 
   const [rows] = await pool.execute(
-    `SELECT
-       substation_id,
-       district_id,
-       province_id,
-       name,
-       code,
-       capacity_mva,
-       voltage_level_kv,
-       latitude,
-       longitude,
-       created_at,
-       updated_at
+    `SELECT ${COLUMNS}
      FROM grid_substations
-     ${whereClause}
+     ${where.sql}
      ${orderClause}
      LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+    [...where.params, limit, offset]
   );
   return rows;
 }
 
-async function countAll(scope) {
-  const { where, params } = scopePredicate(scope);
-  const whereClause = where ? `WHERE ${where}` : '';
+async function countAll(scope, filters = null) {
+  const where = whereClause(equalityFilters(filters, FILTERABLE), scopePredicate(scope));
   const [[{ count }]] = await pool.execute(
-    `SELECT COUNT(*) as count FROM grid_substations ${whereClause}`,
-    params
+    `SELECT COUNT(*) AS count FROM grid_substations ${where.sql}`,
+    where.params
   );
   return count;
 }
 
 async function findById(id, scope) {
-  const { where, params } = scopePredicate(scope);
-  const whereClause = where ? `AND ${where}` : '';
+  const where = whereClause({ where: 'substation_id = ?', params: [id] }, scopePredicate(scope));
   const [rows] = await pool.execute(
-    `SELECT
-       substation_id,
-       district_id,
-       province_id,
-       name,
-       code,
-       capacity_mva,
-       voltage_level_kv,
-       latitude,
-       longitude,
-       created_at,
-       updated_at
+    `SELECT ${COLUMNS}
      FROM grid_substations
-     WHERE substation_id = ?
-     ${whereClause}`,
-    [id, ...params]
+     ${where.sql}`,
+    where.params
   );
   return rows.length > 0 ? rows[0] : null;
-}
-
-async function findByDistrictId(districtId, scope) {
-  const { where, params } = scopePredicate(scope);
-  const whereClause = where ? `AND ${where}` : '';
-  const [rows] = await pool.execute(
-    `SELECT
-       substation_id,
-       district_id,
-       province_id,
-       name,
-       code,
-       capacity_mva,
-       voltage_level_kv,
-       latitude,
-       longitude,
-       created_at,
-       updated_at
-     FROM grid_substations
-     WHERE district_id = ?
-     ${whereClause}
-     ORDER BY substation_id ASC`,
-    [districtId, ...params]
-  );
-  return rows;
 }
 
 module.exports = {
   findAll,
   countAll,
   findById,
-  findByDistrictId,
 };

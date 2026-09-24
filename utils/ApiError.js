@@ -4,12 +4,13 @@
 // turns one into a response body. Repositories throw nothing — they return
 // null for absent and let the service decide whether that is a 404.
 class ApiError extends Error {
-  constructor(status, code, message, details = []) {
+  constructor(status, code, message, details = [], headers = undefined) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.details = details;
+    this.headers = headers;
   }
 
   static badRequest(code, message, details = []) {
@@ -28,12 +29,24 @@ class ApiError extends Error {
     return new ApiError(404, code, message);
   }
 
-  static conflict(code, message, details = []) {
-    return new ApiError(409, code, message, details);
+  static methodNotAllowed(allow) {
+    return new ApiError(405, 'METHOD_NOT_ALLOWED', `This resource supports only ${allow}.`, [], { Allow: allow });
+  }
+
+  static notAcceptable() {
+    return new ApiError(406, 'NOT_ACCEPTABLE', 'This API produces application/json only.');
+  }
+
+  static conflict(code, message, details = [], headers = undefined) {
+    return new ApiError(409, code, message, details, headers);
   }
 
   static preconditionFailed(code = 'PRECONDITION_FAILED', message = 'Precondition failed.') {
     return new ApiError(412, code, message);
+  }
+
+  static unsupportedMediaType() {
+    return new ApiError(415, 'UNSUPPORTED_MEDIA_TYPE', 'Request body must be sent as application/json.');
   }
 }
 

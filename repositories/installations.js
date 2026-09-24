@@ -76,12 +76,19 @@ async function findAll(limit, offset, scope, sort = null, filters = null) {
   return rows;
 }
 
-async function countAll(scope) {
-  const { where, params } = scopePredicate(scope);
-  const whereClause = where ? `WHERE ${where}` : '';
+// Same WHERE as findAll, so total counts what the filters actually select.
+async function countAll(scope, filters = null) {
+  const { where: scopeWhere, params: scopeParams } = scopePredicate(scope);
+  const { where: filterWhere, params: filterParams } = buildFilterClause(filters);
+
+  const conditions = [];
+  if (scopeWhere) conditions.push(scopeWhere);
+  if (filterWhere) conditions.push(filterWhere);
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
   const [[{ count }]] = await pool.execute(
     `SELECT COUNT(*) as count FROM installations ${whereClause}`,
-    params
+    [...scopeParams, ...filterParams]
   );
   return count;
 }
@@ -141,36 +148,6 @@ async function findByDistrictId(districtId, scope) {
      ${whereClause}
      ORDER BY installation_id ASC`,
     [districtId, ...params]
-  );
-  return rows;
-}
-
-async function findBySubstationId(substationId, scope) {
-  const { where, params } = scopePredicate(scope);
-  const whereClause = where ? `AND ${where}` : '';
-  const [rows] = await pool.execute(
-    `SELECT
-       installation_id,
-       reference,
-       meter_id,
-       inverter_id,
-       capacity_kw,
-       panel_count,
-       status,
-       commissioned_on,
-       address_line,
-       latitude,
-       longitude,
-       substation_id,
-       district_id,
-       province_id,
-       created_at,
-       updated_at
-     FROM installations
-     WHERE substation_id = ?
-     ${whereClause}
-     ORDER BY installation_id ASC`,
-    [substationId, ...params]
   );
   return rows;
 }
@@ -272,13 +249,25 @@ async function update(id, scope, data) {
   return result.affectedRows > 0;
 }
 
+async function remove(id, scope) {
+  const { where, params } = scopePredicate(scope);
+  const whereClause = where ? `AND ${where}` : '';
+  const [result] = await pool.execute(
+    `DELETE FROM installations
+     WHERE installation_id = ?
+     ${whereClause}`,
+    [id, ...params]
+  );
+  return result.affectedRows > 0;
+}
+
 module.exports = {
   findAll,
   countAll,
   findById,
   findByDistrictId,
-  findBySubstationId,
   findDeviceSecretByMeterId,
   create,
   update,
+  remove,
 };

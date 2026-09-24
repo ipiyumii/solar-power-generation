@@ -5,7 +5,7 @@ const SORTABLE_FIELDS = {
   districts: ['district_id', 'province_id', 'name', 'code', 'created_at', 'updated_at'],
   provinces: ['province_id', 'name', 'code', 'capital', 'created_at', 'updated_at'],
   installations: ['installation_id', 'reference', 'meter_id', 'capacity_kw', 'status', 'commissioned_on', 'district_id', 'province_id', 'created_at', 'updated_at'],
-  readings: ['reading_id', 'installation_id', 'recorded_at', 'power_kw', 'energy_kwh', 'voltage_v', 'district_id', 'province_id', 'created_at'],
+  readings: ['reading_id', 'installation_id', 'recorded_at', 'power_kw', 'energy_kwh', 'voltage_v', 'district_id', 'province_id', 'ingested_at'],
 };
 
 function parseSort(sortParam, entity) {

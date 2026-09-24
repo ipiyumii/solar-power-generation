@@ -3,6 +3,7 @@
 const ApiError = require('../utils/ApiError');
 const { parseSort } = require('../utils/sortParser');
 const provincesRepo = require('../repositories/provinces');
+const districtsService = require('./districts');
 
 async function listProvinces(limit, offset, scope, sortParam = null) {
   let sort = null;
@@ -39,7 +40,15 @@ async function getProvinceById(id, scope) {
   return province;
 }
 
+// A scoped sub-collection under a parent that is absent or out of scope is
+// itself not found, rather than an empty 200 that implies the parent exists.
+async function listProvinceDistricts(provinceId, limit, offset, scope, sortParam = null) {
+  await getProvinceById(provinceId, scope);
+  return districtsService.listDistricts(limit, offset, scope, sortParam, { province_id: provinceId });
+}
+
 module.exports = {
   listProvinces,
   getProvinceById,
+  listProvinceDistricts,
 };
