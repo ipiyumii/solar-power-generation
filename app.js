@@ -7,6 +7,7 @@ const env = require('./config/env');
 const db = require('./db/client');
 const authenticate = require('./middleware/authenticate');
 const jurisdiction = require('./middleware/jurisdiction');
+const etagHandler = require('./middleware/etagHandler');
 const errorHandler = require('./middleware/errorHandler');
 const notFound = require('./middleware/notFound');
 

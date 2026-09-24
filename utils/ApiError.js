@@ -31,6 +31,10 @@ class ApiError extends Error {
   static conflict(code, message, details = []) {
     return new ApiError(409, code, message, details);
   }
+
+  static preconditionFailed(code = 'PRECONDITION_FAILED', message = 'Precondition failed.') {
+    return new ApiError(412, code, message);
+  }
 }
 
 module.exports = ApiError;
