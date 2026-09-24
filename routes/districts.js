@@ -24,6 +24,20 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+// GET /districts/:id/generation-summary
+router.get('/:id/generation-summary', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return next(ApiError.badRequest('INVALID_ID', 'District ID must be an integer.'));
+    }
+    const summary = await districtsService.getGenerationSummary(id, req.scope);
+    res.json(summary);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /districts/:id
 router.get('/:id', async (req, res, next) => {
   try {
