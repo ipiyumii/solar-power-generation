@@ -44,7 +44,9 @@ function parseFilters(filterParams, entity) {
       if (isNaN(date.getTime())) {
         throw new Error(`Field "${key}" must be a valid ISO 8601 datetime`);
       }
-      filters[key] = date.toISOString();
+      // A Date, not an ISO string: the driver serialises it in UTC to match
+      // the DATETIME columns, where MySQL rejects a trailing "Z".
+      filters[key] = date;
     } else if (fieldType.startsWith('enum:')) {
       const validValues = fieldType.split(':')[1].split(',');
       if (!validValues.includes(value)) {

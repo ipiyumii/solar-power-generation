@@ -22,7 +22,10 @@ module.exports = (req, _res, next) => {
   } else if (jurisdiction.level === 'provincial') {
     scope.province_id = jurisdiction.province_id;
   } else if (jurisdiction.level === 'district') {
+    // province_id too: tables with no district column (provinces) are scoped
+    // to the district's own province.
     scope.district_id = jurisdiction.district_id;
+    scope.province_id = jurisdiction.province_id;
   }
 
   req.scope = scope;

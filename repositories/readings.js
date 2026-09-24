@@ -66,14 +66,33 @@ async function findAll(limit, offset, scope, sort = null, filters = null) {
   return rows;
 }
 
-async function countAll(scope) {
-  const { where, params } = scopePredicate(scope);
-  const whereClause = where ? `WHERE ${where}` : '';
+// Same WHERE as findAll, so total counts what the filters actually select.
+async function countAll(scope, filters = null) {
+  const { where: scopeWhere, params: scopeParams } = scopePredicate(scope);
+  const { where: filterWhere, params: filterParams } = buildFilterClause(filters);
+
+  const conditions = [];
+  if (scopeWhere) conditions.push(scopeWhere);
+  if (filterWhere) conditions.push(filterWhere);
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
   const [[{ count }]] = await pool.execute(
     `SELECT COUNT(*) as count FROM readings ${whereClause}`,
-    params
+    [...scopeParams, ...filterParams]
   );
   return count;
+}
+
+// Unscoped: used only after a device's insert collided on the natural key,
+// to point the 409 at the reading that already holds that slot.
+async function findIdByNaturalKey(installationId, recordedAt) {
+  const [rows] = await pool.execute(
+    `SELECT reading_id
+     FROM readings
+     WHERE installation_id = ? AND recorded_at = ?`,
+    [installationId, recordedAt]
+  );
+  return rows.length > 0 ? rows[0].reading_id : null;
 }
 
 async function findById(id, scope) {
@@ -210,28 +229,6 @@ async function getStatisticsByInstallationId(installationId, scope) {
   return stats;
 }
 
-async function findByInstallationAndDateRange(installationId, dateStart, dateEnd, scope) {
-  const { where, params } = scopePredicate(scope);
-  const whereClause = where ? `AND ${where}` : '';
-  const [rows] = await pool.execute(
-    `SELECT
-       reading_id,
-       installation_id,
-       recorded_at,
-       power_kw,
-       energy_kwh,
-       voltage_v
-     FROM readings
-     WHERE installation_id = ?
-     AND DATE(recorded_at) >= ?
-     AND DATE(recorded_at) <= ?
-     ${whereClause}
-     ORDER BY recorded_at ASC`,
-    [installationId, dateStart, dateEnd, ...params]
-  );
-  return rows;
-}
-
 async function getEnergyGenerationStats(installationId, date, scope) {
   const { where, params } = scopePredicate(scope);
   const whereClause = where ? `AND ${where}` : '';
@@ -255,9 +252,9 @@ module.exports = {
   findAll,
   countAll,
   findById,
+  findIdByNaturalKey,
   create,
   findLatestByInstallationId,
   getStatisticsByInstallationId,
-  findByInstallationAndDateRange,
   getEnergyGenerationStats,
 };

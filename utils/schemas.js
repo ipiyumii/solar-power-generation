@@ -2,51 +2,118 @@
 
 const { z } = require('zod');
 
-const paginationSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(1000).default(50).optional(),
-  offset: z.coerce.number().int().min(0).default(0).optional(),
-  sort: z.string().optional(),
-}).passthrough();
+// Every schema is strict: an unknown key is a 400, never silently dropped,
+// so a misspelled filter cannot return unfiltered data.
 
-const sortParamSchema = z.string().regex(/^[a-z_]+:(asc|desc)$/i, 'Sort format must be "field:direction"');
+const STATUS = ['active', 'inactive', 'decommissioned'];
 
-const createReadingSchema = z.object({
-  installation_id: z.coerce.number().int().positive('installation_id must be a positive integer'),
-  recorded_at: z.string().datetime('recorded_at must be ISO 8601 datetime'),
-  power_kw: z.coerce.number().min(0, 'power_kw must be non-negative'),
-  energy_kwh: z.coerce.number().min(0, 'energy_kwh must be non-negative'),
-  voltage_v: z.coerce.number().positive('voltage_v must be positive'),
-}).strict();
+const pathId = z.coerce.number().int().positive();
+const queryId = z.coerce.number().int().positive();
+const bodyId = z.number().int().positive();
+const timestamp = z.iso.datetime({ offset: true });
 
-const createInstallationSchema = z.object({
-  reference: z.string().min(1).max(32, 'reference must be at most 32 characters'),
-  meter_id: z.string().min(1).max(32, 'meter_id must be at most 32 characters'),
-  inverter_id: z.string().min(1).max(48, 'inverter_id must be at most 48 characters'),
-  capacity_kw: z.coerce.number().positive('capacity_kw must be positive'),
-  panel_count: z.coerce.number().int().positive('panel_count must be a positive integer'),
-  status: z.enum(['active', 'inactive', 'decommissioned']).default('active'),
-  commissioned_on: z.string().date('commissioned_on must be YYYY-MM-DD format'),
-  address_line: z.string().min(1).max(160, 'address_line must be at most 160 characters'),
-  latitude: z.coerce.number().min(-90).max(90, 'latitude must be between -90 and 90'),
-  longitude: z.coerce.number().min(-180).max(180, 'longitude must be between -180 and 180'),
-  substation_id: z.coerce.number().int().positive('substation_id must be a positive integer'),
-}).strict();
+const page = {
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+  sort: z.string().min(1).optional(),
+};
 
-const updateInstallationSchema = z.object({
-  reference: z.string().min(1).max(32, 'reference must be at most 32 characters').optional(),
-  capacity_kw: z.coerce.number().positive('capacity_kw must be positive').optional(),
-  panel_count: z.coerce.number().int().positive('panel_count must be a positive integer').optional(),
-  status: z.enum(['active', 'inactive', 'decommissioned']).optional(),
-  commissioned_on: z.string().date('commissioned_on must be YYYY-MM-DD format').optional(),
-  address_line: z.string().min(1).max(160, 'address_line must be at most 160 characters').optional(),
-  latitude: z.coerce.number().min(-90).max(90, 'latitude must be between -90 and 90').optional(),
-  longitude: z.coerce.number().min(-180).max(180, 'longitude must be between -180 and 180').optional(),
-}).strict();
+const timeWindow = {
+  recorded_at_start: timestamp.optional(),
+  recorded_at_end: timestamp.optional(),
+};
+
+// Path parameters
+const idParams = z.strictObject({ id: pathId });
+const readingParams = z.strictObject({ id: pathId, reading_id: pathId });
+
+// Query strings
+const emptyQuery = z.strictObject({});
+const listQuery = z.strictObject(page);
+const districtsQuery = z.strictObject({ ...page, province_id: queryId.optional() });
+const substationsQuery = z.strictObject({
+  ...page,
+  province_id: queryId.optional(),
+  district_id: queryId.optional(),
+});
+const installationsQuery = z.strictObject({
+  ...page,
+  province_id: queryId.optional(),
+  district_id: queryId.optional(),
+  substation_id: queryId.optional(),
+  status: z.enum(STATUS).optional(),
+});
+const substationInstallationsQuery = z.strictObject({ ...page, status: z.enum(STATUS).optional() });
+const readingsQuery = z.strictObject({ ...page, installation_id: queryId.optional(), ...timeWindow });
+const installationReadingsQuery = z.strictObject({ ...page, ...timeWindow });
+
+// Bodies. Numbers must arrive as JSON numbers, not numeric strings.
+
+// The installation id comes from the path, and jurisdiction is stamped from
+// the installation record, so neither may appear in the body.
+const createReadingBody = z.strictObject({
+  recorded_at: timestamp,
+  power_kw: z.number().min(0).max(1000),
+  energy_kwh: z.number().min(0),
+  voltage_v: z.number().min(0).max(500),
+});
+
+// The fields a client may set after creation. meter_id, inverter_id and
+// substation_id are the installation's identity and placement, fixed at
+// registration.
+const mutableInstallation = {
+  reference: z.string().min(1).max(32),
+  capacity_kw: z.number().positive().max(999999.99),
+  panel_count: z.number().int().positive().max(65535),
+  status: z.enum(STATUS),
+  commissioned_on: z.iso.date(),
+  address_line: z.string().min(1).max(160),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+};
+
+const createInstallationBody = z.strictObject({
+  ...mutableInstallation,
+  status: z.enum(STATUS).default('active'),
+  meter_id: z.string().min(1).max(32),
+  inverter_id: z.string().min(1).max(48),
+  substation_id: bodyId,
+});
+
+// PUT replaces the whole mutable state, so every field is required.
+const replaceInstallationBody = z.strictObject(mutableInstallation);
+
+// PATCH changes only what it names.
+const patchInstallationBody = z
+  .strictObject(mutableInstallation)
+  .partial()
+  .refine((body) => Object.keys(body).length > 0, 'At least one field is required.');
+
+const loginBody = z.strictObject({
+  email: z.email(),
+  password: z.string().min(1),
+});
+
+const deviceTokenBody = z.strictObject({
+  meter_id: z.string().min(1),
+  device_secret: z.string().min(1),
+});
 
 module.exports = {
-  paginationSchema,
-  sortParamSchema,
-  createReadingSchema,
-  createInstallationSchema,
-  updateInstallationSchema,
+  idParams,
+  readingParams,
+  emptyQuery,
+  listQuery,
+  districtsQuery,
+  substationsQuery,
+  installationsQuery,
+  substationInstallationsQuery,
+  readingsQuery,
+  installationReadingsQuery,
+  createReadingBody,
+  createInstallationBody,
+  replaceInstallationBody,
+  patchInstallationBody,
+  loginBody,
+  deviceTokenBody,
 };

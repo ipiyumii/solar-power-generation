@@ -1,62 +1,31 @@
 'use strict';
 
 const express = require('express');
-const ApiError = require('../utils/ApiError');
-const { paginationSchema, createReadingSchema } = require('../utils/schemas');
+const validate = require('../middleware/validate');
 const requireScope = require('../middleware/requireScope');
-const requireDevice = require('../middleware/requireDevice');
+const methodNotAllowed = require('../middleware/methodNotAllowed');
+const { idParams, emptyQuery, readingsQuery } = require('../utils/schemas');
 const readingsService = require('../services/readings');
 
+// The estate-wide analytical view. Ingestion lives under the installation
+// (POST /installations/:id/readings), so this collection is read-only.
 const router = express.Router();
 
-// POST /readings - device only
-router.post('/', requireDevice, async (req, res, next) => {
-  try {
-    const payload = createReadingSchema.parse(req.body);
-    const reading = await readingsService.createReading(payload, req.scope);
-    res.status(201).json(reading);
-  } catch (err) {
-    if (err.name === 'ZodError') {
-      return next(ApiError.badRequest('INVALID_READING', 'Invalid reading data.', err.errors));
-    }
-    next(err);
-  }
-});
-
-router.use(requireScope('readings:read'));
+const canRead = requireScope('readings:read');
 
 // GET /readings
-router.get('/', async (req, res, next) => {
-  try {
-    const query = paginationSchema.parse(req.query);
-    const filters = {
-      installation_id: query.installation_id,
-      recorded_at_start: query.recorded_at_start,
-      recorded_at_end: query.recorded_at_end,
-    };
-    const activeFilters = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== undefined));
-    const result = await readingsService.listReadings(query.limit, query.offset, req.scope, query.sort, Object.keys(activeFilters).length > 0 ? activeFilters : null);
-    res.json(result);
-  } catch (err) {
-    if (err.name === 'ZodError') {
-      return next(ApiError.badRequest('INVALID_QUERY', 'Invalid query parameters.', err.errors));
-    }
-    next(err);
-  }
-});
+router.route('/')
+  .get(canRead, validate(readingsQuery, 'query'), async (req, res) => {
+    const { limit, offset, sort, ...filters } = req.validated.query;
+    res.json(await readingsService.listReadings(limit, offset, req.scope, sort, filters));
+  })
+  .all(methodNotAllowed('GET, HEAD'));
 
 // GET /readings/:id
-router.get('/:id', async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-      return next(ApiError.badRequest('INVALID_ID', 'Reading ID must be an integer.'));
-    }
-    const reading = await readingsService.getReadingById(id, req.scope);
-    res.json(reading);
-  } catch (err) {
-    next(err);
-  }
-});
+router.route('/:id')
+  .get(canRead, validate(idParams, 'params'), validate(emptyQuery, 'query'), async (req, res) => {
+    res.json(await readingsService.getReadingById(req.validated.params.id, req.scope));
+  })
+  .all(methodNotAllowed('GET, HEAD'));
 
 module.exports = router;

@@ -2,102 +2,108 @@
 
 const express = require('express');
 const ApiError = require('../utils/ApiError');
-const { paginationSchema, createInstallationSchema, updateInstallationSchema } = require('../utils/schemas');
+const { resourceUrl } = require('../utils/links');
+const validate = require('../middleware/validate');
 const requireScope = require('../middleware/requireScope');
 const requirePrincipal = require('../middleware/requirePrincipal');
+const methodNotAllowed = require('../middleware/methodNotAllowed');
+const {
+  idParams,
+  readingParams,
+  emptyQuery,
+  installationsQuery,
+  installationReadingsQuery,
+  createInstallationBody,
+  replaceInstallationBody,
+  patchInstallationBody,
+  createReadingBody,
+} = require('../utils/schemas');
 const installationsService = require('../services/installations');
+const readingsService = require('../services/readings');
 
 const router = express.Router();
 
-// Read operations
-router.get('/', requireScope('installations:read'), async (req, res, next) => {
-  try {
-    const query = paginationSchema.parse(req.query);
-    const filters = {
-      province_id: query.province_id,
-      district_id: query.district_id,
-      substation_id: query.substation_id,
-      status: query.status,
-    };
-    const activeFilters = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== undefined));
-    const result = await installationsService.listInstallations(query.limit, query.offset, req.scope, query.sort, Object.keys(activeFilters).length > 0 ? activeFilters : null);
-    res.json(result);
-  } catch (err) {
-    if (err.name === 'ZodError') {
-      return next(ApiError.badRequest('INVALID_QUERY', 'Invalid query parameters.', err.errors));
-    }
-    next(err);
-  }
+const canRead = requireScope('installations:read');
+const canWrite = [requirePrincipal('user'), requireScope('installations:write')];
+const byId = validate(idParams, 'params');
+const noQuery = validate(emptyQuery, 'query');
+
+// GET /installations
+router.get('/', canRead, validate(installationsQuery, 'query'), async (req, res) => {
+  const { limit, offset, sort, ...filters } = req.validated.query;
+  res.json(await installationsService.listInstallations(limit, offset, req.scope, sort, filters));
 });
 
-router.get('/:id/overview', requireScope('installations:read'), async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-      return next(ApiError.badRequest('INVALID_ID', 'Installation ID must be an integer.'));
-    }
-    const overview = await installationsService.getInstallationOverview(id, req.scope);
-    res.json(overview);
-  } catch (err) {
-    next(err);
-  }
+// POST /installations — the device secret is in this response and nowhere else.
+router.post('/', ...canWrite, validate(createInstallationBody, 'body'), async (req, res) => {
+  const { installation, device_secret } = await installationsService.createInstallation(req.validated.body, req.scope);
+  res.status(201)
+    .location(resourceUrl(`/installations/${installation.installation_id}`))
+    .json({ ...installation, device_secret });
 });
 
-router.get('/:id/last-known-reading', requireScope('installations:read'), async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-      return next(ApiError.badRequest('INVALID_ID', 'Installation ID must be an integer.'));
-    }
-    const reading = await installationsService.getLastKnownReading(id, req.scope);
-    res.json(reading);
-  } catch (err) {
-    next(err);
-  }
+router.route('/:id')
+  .get(canRead, byId, noQuery, async (req, res) => {
+    res.json(await installationsService.getInstallationById(req.validated.params.id, req.scope));
+  })
+  .put(...canWrite, byId, validate(replaceInstallationBody, 'body'), async (req, res) => {
+    res.json(await installationsService.replaceInstallation(
+      req.validated.params.id, req.scope, req.validated.body, req.get('If-Match')
+    ));
+  })
+  .patch(...canWrite, byId, validate(patchInstallationBody, 'body'), async (req, res) => {
+    res.json(await installationsService.patchInstallation(
+      req.validated.params.id, req.scope, req.validated.body, req.get('If-Match')
+    ));
+  })
+  .delete(...canWrite, byId, async (req, res) => {
+    await installationsService.deleteInstallation(req.validated.params.id, req.scope, req.get('If-Match'));
+    res.status(204).end();
+  })
+  .all(methodNotAllowed('GET, HEAD, PUT, PATCH, DELETE'));
+
+// GET /installations/:id/overview — composite
+router.get('/:id/overview', canRead, byId, noQuery, async (req, res) => {
+  res.json(await installationsService.getInstallationOverview(req.validated.params.id, req.scope));
 });
 
-router.get('/:id', requireScope('installations:read'), async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-      return next(ApiError.badRequest('INVALID_ID', 'Installation ID must be an integer.'));
-    }
-    const installation = await installationsService.getInstallationById(id, req.scope);
-    res.json(installation);
-  } catch (err) {
-    next(err);
-  }
+// GET /installations/:id/last-known-reading — derived, operational
+router.get('/:id/last-known-reading', canRead, byId, noQuery, async (req, res) => {
+  res.json(await installationsService.getLastKnownReading(req.validated.params.id, req.scope));
 });
 
-// Write operations
-router.post('/', requirePrincipal('user'), requireScope('installations:write'), async (req, res, next) => {
-  try {
-    const data = createInstallationSchema.parse(req.body);
-    const installation = await installationsService.createInstallation(data, req.scope);
-    res.status(201).json(installation);
-  } catch (err) {
-    if (err.name === 'ZodError') {
-      return next(ApiError.badRequest('INVALID_REQUEST', 'Invalid request body.', err.errors));
-    }
-    next(err);
-  }
-});
+// /installations/:id/readings — the analytical history, and the device's
+// ingestion point.
+router.route('/:id/readings')
+  .get(requireScope('readings:read'), byId, validate(installationReadingsQuery, 'query'), async (req, res) => {
+    res.json(await readingsService.listInstallationReadings(req.validated.params.id, req.validated.query, req.scope));
+  })
+  .post(
+    requirePrincipal('device'),
+    requireScope('readings:write'),
+    byId,
+    validate(createReadingBody, 'body'),
+    async (req, res) => {
+      const installationId = req.validated.params.id;
 
-router.put('/:id', requirePrincipal('user'), requireScope('installations:write'), async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-      return next(ApiError.badRequest('INVALID_ID', 'Installation ID must be an integer.'));
+      // The binding check: a device may write to exactly one installation.
+      // 403, not 404 — the device already knows its own site exists.
+      if (req.principal.installation_id !== installationId) {
+        throw ApiError.forbidden('INSTALLATION_MISMATCH', 'This device may only submit readings for its own installation.');
+      }
+
+      const { reading, location } = await readingsService.ingestReading(installationId, req.validated.body);
+      res.status(201).location(location).json(reading);
     }
-    const data = updateInstallationSchema.parse(req.body);
-    const installation = await installationsService.updateInstallation(id, req.scope, data);
-    res.json(installation);
-  } catch (err) {
-    if (err.name === 'ZodError') {
-      return next(ApiError.badRequest('INVALID_REQUEST', 'Invalid request body.', err.errors));
-    }
-    next(err);
-  }
-});
+  )
+  .all(methodNotAllowed('GET, HEAD, POST'));
+
+// Readings are append-only: the refusal of every mutation is the feature.
+router.route('/:id/readings/:reading_id')
+  .get(requireScope('readings:read'), validate(readingParams, 'params'), noQuery, async (req, res) => {
+    const { id, reading_id } = req.validated.params;
+    res.json(await readingsService.getInstallationReading(id, reading_id, req.scope));
+  })
+  .all(methodNotAllowed('GET, HEAD'));
 
 module.exports = router;

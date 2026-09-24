@@ -1,9 +1,9 @@
 'use strict';
 
 const express = require('express');
-const ApiError = require('../utils/ApiError');
-const { paginationSchema } = require('../utils/schemas');
+const validate = require('../middleware/validate');
 const requireScope = require('../middleware/requireScope');
+const { idParams, emptyQuery, listQuery } = require('../utils/schemas');
 const provincesService = require('../services/provinces');
 
 const router = express.Router();
@@ -11,31 +11,20 @@ const router = express.Router();
 router.use(requireScope('installations:read'));
 
 // GET /provinces
-router.get('/', async (req, res, next) => {
-  try {
-    const query = paginationSchema.parse(req.query);
-    const result = await provincesService.listProvinces(query.limit, query.offset, req.scope, query.sort);
-    res.json(result);
-  } catch (err) {
-    if (err.name === 'ZodError') {
-      return next(ApiError.badRequest('INVALID_QUERY', 'Invalid query parameters.', err.errors));
-    }
-    next(err);
-  }
+router.get('/', validate(listQuery, 'query'), async (req, res) => {
+  const { limit, offset, sort } = req.validated.query;
+  res.json(await provincesService.listProvinces(limit, offset, req.scope, sort));
 });
 
 // GET /provinces/:id
-router.get('/:id', async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-      return next(ApiError.badRequest('INVALID_ID', 'Province ID must be an integer.'));
-    }
-    const province = await provincesService.getProvinceById(id, req.scope);
-    res.json(province);
-  } catch (err) {
-    next(err);
-  }
+router.get('/:id', validate(idParams, 'params'), validate(emptyQuery, 'query'), async (req, res) => {
+  res.json(await provincesService.getProvinceById(req.validated.params.id, req.scope));
+});
+
+// GET /provinces/:id/districts
+router.get('/:id/districts', validate(idParams, 'params'), validate(listQuery, 'query'), async (req, res) => {
+  const { limit, offset, sort } = req.validated.query;
+  res.json(await provincesService.listProvinceDistricts(req.validated.params.id, limit, offset, req.scope, sort));
 });
 
 module.exports = router;

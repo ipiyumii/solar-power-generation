@@ -3,8 +3,9 @@
 const ApiError = require('../utils/ApiError');
 const { parseSort } = require('../utils/sortParser');
 const gridSubstationsRepo = require('../repositories/gridSubstations');
+const installationsService = require('./installations');
 
-async function listGridSubstations(limit, offset, scope, sortParam = null) {
+async function listGridSubstations(limit, offset, scope, sortParam = null, filters = null) {
   let sort = null;
 
   if (sortParam) {
@@ -16,8 +17,8 @@ async function listGridSubstations(limit, offset, scope, sortParam = null) {
   }
 
   const [substations, total] = await Promise.all([
-    gridSubstationsRepo.findAll(limit, offset, scope, sort),
-    gridSubstationsRepo.countAll(scope),
+    gridSubstationsRepo.findAll(limit, offset, scope, sort, filters),
+    gridSubstationsRepo.countAll(scope, filters),
   ]);
 
   return {
@@ -39,7 +40,13 @@ async function getGridSubstationById(id, scope) {
   return substation;
 }
 
+async function listSubstationInstallations(substationId, limit, offset, scope, sortParam = null, status = undefined) {
+  await getGridSubstationById(substationId, scope);
+  return installationsService.listInstallations(limit, offset, scope, sortParam, { substation_id: substationId, status });
+}
+
 module.exports = {
   listGridSubstations,
   getGridSubstationById,
+  listSubstationInstallations,
 };

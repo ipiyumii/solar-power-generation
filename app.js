@@ -8,6 +8,7 @@ const db = require('./db/client');
 const authenticate = require('./middleware/authenticate');
 const jurisdiction = require('./middleware/jurisdiction');
 const etagHandler = require('./middleware/etagHandler');
+const negotiate = require('./middleware/negotiate');
 const errorHandler = require('./middleware/errorHandler');
 const notFound = require('./middleware/notFound');
 
@@ -61,6 +62,9 @@ const districtsRouter = require('./routes/districts');
 const gridSubstationsRouter = require('./routes/gridSubstations');
 const installationsRouter = require('./routes/installations');
 const readingsRouter = require('./routes/readings');
+
+// 406 / 415 apply to every API route, the public auth endpoints included.
+app.use('/api/v1', negotiate);
 
 // Authentication endpoints (public).
 app.use('/api/v1/auth', authRouter);

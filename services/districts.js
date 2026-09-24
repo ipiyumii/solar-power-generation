@@ -6,8 +6,9 @@ const districtsRepo = require('../repositories/districts');
 const provincesRepo = require('../repositories/provinces');
 const installationsRepo = require('../repositories/installations');
 const readingsRepo = require('../repositories/readings');
+const gridSubstationsService = require('./gridSubstations');
 
-async function listDistricts(limit, offset, scope, sortParam = null) {
+async function listDistricts(limit, offset, scope, sortParam = null, filters = null) {
   let sort = null;
 
   if (sortParam) {
@@ -19,8 +20,8 @@ async function listDistricts(limit, offset, scope, sortParam = null) {
   }
 
   const [districts, total] = await Promise.all([
-    districtsRepo.findAll(limit, offset, scope, sort),
-    districtsRepo.countAll(scope),
+    districtsRepo.findAll(limit, offset, scope, sort, filters),
+    districtsRepo.countAll(scope, filters),
   ]);
 
   return {
@@ -40,6 +41,11 @@ async function getDistrictById(id, scope) {
   }
 
   return district;
+}
+
+async function listDistrictSubstations(districtId, limit, offset, scope, sortParam = null) {
+  await getDistrictById(districtId, scope);
+  return gridSubstationsService.listGridSubstations(limit, offset, scope, sortParam, { district_id: districtId });
 }
 
 async function getGenerationSummary(districtId, scope) {
@@ -109,5 +115,6 @@ async function getGenerationSummary(districtId, scope) {
 module.exports = {
   listDistricts,
   getDistrictById,
+  listDistrictSubstations,
   getGenerationSummary,
 };
