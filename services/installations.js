@@ -6,6 +6,9 @@ const { parseSort } = require('../utils/sortParser');
 const { parseFilters } = require('../utils/filterParser');
 const installationsRepo = require('../repositories/installations');
 const gridSubstationsRepo = require('../repositories/gridSubstations');
+const readingsRepo = require('../repositories/readings');
+const provincesRepo = require('../repositories/provinces');
+const districtsRepo = require('../repositories/districts');
 
 async function listInstallations(limit, offset, scope, sortParam = null, filterParams = null) {
   let sort = null;
@@ -106,9 +109,63 @@ async function updateInstallation(id, scope, data) {
   return await installationsRepo.findById(id, scope);
 }
 
+async function getInstallationOverview(id, scope) {
+  const installation = await installationsRepo.findById(id, scope);
+
+  if (!installation) {
+    throw ApiError.notFound('INSTALLATION_NOT_FOUND', `Installation ${id} not found.`);
+  }
+
+  const [substation, latestReading, readingsStats, province, district] = await Promise.all([
+    gridSubstationsRepo.findById(installation.substation_id, scope),
+    readingsRepo.findLatestByInstallationId(id, scope),
+    readingsRepo.getStatisticsByInstallationId(id, scope),
+    provincesRepo.findById(installation.province_id, {}),
+    districtsRepo.findById(installation.district_id, {}),
+  ]);
+
+  return {
+    installation,
+    substation,
+    province,
+    district,
+    latest_reading: latestReading,
+    readings_stats: {
+      total_count: readingsStats.total_count || 0,
+      date_range: readingsStats.total_count > 0 ? {
+        from: readingsStats.date_from,
+        to: readingsStats.date_to,
+      } : null,
+      power_kw: {
+        min: readingsStats.power_min,
+        max: readingsStats.power_max,
+        avg: readingsStats.power_avg ? parseFloat(readingsStats.power_avg.toFixed(2)) : null,
+      },
+      energy_kwh: {
+        min: readingsStats.energy_min,
+        max: readingsStats.energy_max,
+        avg: readingsStats.energy_avg ? parseFloat(readingsStats.energy_avg.toFixed(2)) : null,
+      },
+      voltage_v: {
+        min: readingsStats.voltage_min,
+        max: readingsStats.voltage_max,
+        avg: readingsStats.voltage_avg ? parseFloat(readingsStats.voltage_avg.toFixed(2)) : null,
+      },
+    },
+    capacity_metrics: {
+      capacity_kw: installation.capacity_kw,
+      panel_count: installation.panel_count,
+      average_power_utilization_percent: readingsStats.power_avg && installation.capacity_kw
+        ? parseFloat(((readingsStats.power_avg / installation.capacity_kw) * 100).toFixed(2))
+        : null,
+    },
+  };
+}
+
 module.exports = {
   listInstallations,
   getInstallationById,
   createInstallation,
   updateInstallation,
+  getInstallationOverview,
 };
