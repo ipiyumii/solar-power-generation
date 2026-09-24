@@ -68,6 +68,7 @@ app.use('/api/v1/auth', authRouter);
 // Protected endpoints: require authentication and jurisdiction scoping.
 app.use('/api/v1', authenticate);
 app.use('/api/v1', jurisdiction);
+app.use('/api/v1', etagHandler);
 
 app.use('/api/v1/provinces', provincesRouter);
 app.use('/api/v1/districts', districtsRouter);

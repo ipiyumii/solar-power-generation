@@ -160,9 +160,61 @@ async function create(installationId, recordedAt, powerKw, energyKwh, voltageV, 
   return rows.length > 0 ? rows[0] : null;
 }
 
+async function findLatestByInstallationId(installationId, scope) {
+  const { where, params } = scopePredicate(scope);
+  const whereClause = where ? `AND ${where}` : '';
+  const [rows] = await pool.execute(
+    `SELECT
+       reading_id,
+       installation_id,
+       recorded_at,
+       ingested_at,
+       power_kw,
+       energy_kwh,
+       voltage_v,
+       substation_id,
+       district_id,
+       province_id
+     FROM readings
+     WHERE installation_id = ?
+     ${whereClause}
+     ORDER BY recorded_at DESC
+     LIMIT 1`,
+    [installationId, ...params]
+  );
+  return rows.length > 0 ? rows[0] : null;
+}
+
+async function getStatisticsByInstallationId(installationId, scope) {
+  const { where, params } = scopePredicate(scope);
+  const whereClause = where ? `AND ${where}` : '';
+  const [[stats]] = await pool.execute(
+    `SELECT
+       COUNT(*) as total_count,
+       MIN(recorded_at) as date_from,
+       MAX(recorded_at) as date_to,
+       MIN(power_kw) as power_min,
+       MAX(power_kw) as power_max,
+       AVG(power_kw) as power_avg,
+       MIN(energy_kwh) as energy_min,
+       MAX(energy_kwh) as energy_max,
+       AVG(energy_kwh) as energy_avg,
+       MIN(voltage_v) as voltage_min,
+       MAX(voltage_v) as voltage_max,
+       AVG(voltage_v) as voltage_avg
+     FROM readings
+     WHERE installation_id = ?
+     ${whereClause}`,
+    [installationId, ...params]
+  );
+  return stats;
+}
+
 module.exports = {
   findAll,
   countAll,
   findById,
   create,
+  findLatestByInstallationId,
+  getStatisticsByInstallationId,
 };
