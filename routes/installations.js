@@ -43,6 +43,19 @@ router.get('/:id/overview', requireScope('installations:read'), async (req, res,
   }
 });
 
+router.get('/:id/last-known-reading', requireScope('installations:read'), async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return next(ApiError.badRequest('INVALID_ID', 'Installation ID must be an integer.'));
+    }
+    const reading = await installationsService.getLastKnownReading(id, req.scope);
+    res.json(reading);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/:id', requireScope('installations:read'), async (req, res, next) => {
   try {
     const id = parseInt(req.params.id, 10);
