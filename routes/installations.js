@@ -47,7 +47,7 @@ router.get('/:id', requireScope('installations:read'), async (req, res, next) =>
 router.post('/', requirePrincipal('user'), requireScope('installations:write'), async (req, res, next) => {
   try {
     const data = createInstallationSchema.parse(req.body);
-    const installation = await installationsService.createInstallation(data);
+    const installation = await installationsService.createInstallation(data, req.scope);
     res.status(201).json(installation);
   } catch (err) {
     if (err.name === 'ZodError') {
