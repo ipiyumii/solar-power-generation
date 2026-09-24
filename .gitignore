@@ -15,6 +15,9 @@ Thumbs.db
 # Editor
 .vscode/
 
+# Plaintext credentials written by scripts/seed.js
+seed-credentials.local.json
+
 # Build output
 build/
 

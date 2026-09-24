@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS districts (
                ON UPDATE CURRENT_TIMESTAMP(3),
 
   UNIQUE KEY uq_districts_code (code),
+  UNIQUE KEY uq_districts_district_province (district_id, province_id),
   KEY ix_districts_province (province_id),
 
   CONSTRAINT fk_districts_province
@@ -62,12 +63,21 @@ CREATE TABLE IF NOT EXISTS grid_substations (
                    ON UPDATE CURRENT_TIMESTAMP(3),
 
   UNIQUE KEY uq_substations_code (code),
+  UNIQUE KEY uq_substations_jurisdiction (substation_id, district_id, province_id),
   KEY ix_substations_district (district_id),
   KEY ix_substations_province (province_id),
 
   CONSTRAINT fk_substations_district
     FOREIGN KEY (district_id)
     REFERENCES districts(district_id)
+    ON UPDATE CASCADE
+    ON DELETE RESTRICT,
+
+  -- The denormalised province_id must be the district's own province; a
+  -- drifted value would put the substation in the wrong user's scope.
+  CONSTRAINT fk_substations_district_province
+    FOREIGN KEY (district_id, province_id)
+    REFERENCES districts(district_id, province_id)
     ON UPDATE CASCADE
     ON DELETE RESTRICT,
 
@@ -127,6 +137,13 @@ CREATE TABLE IF NOT EXISTS installations (
     ON UPDATE CASCADE
     ON DELETE RESTRICT,
 
+  -- District and province must be the substation's own, never supplied freely.
+  CONSTRAINT fk_installations_substation_jurisdiction
+    FOREIGN KEY (substation_id, district_id, province_id)
+    REFERENCES grid_substations(substation_id, district_id, province_id)
+    ON UPDATE CASCADE
+    ON DELETE RESTRICT,
+
   CONSTRAINT fk_installations_district
     FOREIGN KEY (district_id)
     REFERENCES districts(district_id)
@@ -176,6 +193,19 @@ CREATE TABLE IF NOT EXISTS readings (
     province_id,
     recorded_at
   ),
+
+  KEY ix_readings_substation_time (
+    substation_id,
+    recorded_at
+  ),
+
+  -- No composite FK to installations: the jurisdiction is an as-recorded
+  -- snapshot, and must not follow an installation that later moves.
+  CONSTRAINT fk_readings_substation
+    FOREIGN KEY (substation_id)
+    REFERENCES grid_substations(substation_id)
+    ON UPDATE CASCADE
+    ON DELETE RESTRICT,
 
   CONSTRAINT fk_readings_installation
     FOREIGN KEY (installation_id)
@@ -267,3 +297,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   filename   VARCHAR(128) NOT NULL PRIMARY KEY,
   applied_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- This file is the current full schema, so a database built from it already
+-- contains every migration below; record them so migrate.js skips them.
+INSERT IGNORE INTO schema_migrations (filename) VALUES
+  ('002_jurisdiction_consistency.sql');
