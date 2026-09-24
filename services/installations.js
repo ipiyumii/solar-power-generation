@@ -162,10 +162,27 @@ async function getInstallationOverview(id, scope) {
   };
 }
 
+async function getLastKnownReading(id, scope) {
+  const installation = await installationsRepo.findById(id, scope);
+
+  if (!installation) {
+    throw ApiError.notFound('INSTALLATION_NOT_FOUND', `Installation ${id} not found.`);
+  }
+
+  const reading = await readingsRepo.findLatestByInstallationId(id, scope);
+
+  if (!reading) {
+    throw ApiError.notFound('READING_NOT_FOUND', 'No readings available for this installation.');
+  }
+
+  return reading;
+}
+
 module.exports = {
   listInstallations,
   getInstallationById,
   createInstallation,
   updateInstallation,
   getInstallationOverview,
+  getLastKnownReading,
 };
