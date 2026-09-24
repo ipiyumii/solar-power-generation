@@ -210,6 +210,47 @@ async function getStatisticsByInstallationId(installationId, scope) {
   return stats;
 }
 
+async function findByInstallationAndDateRange(installationId, dateStart, dateEnd, scope) {
+  const { where, params } = scopePredicate(scope);
+  const whereClause = where ? `AND ${where}` : '';
+  const [rows] = await pool.execute(
+    `SELECT
+       reading_id,
+       installation_id,
+       recorded_at,
+       power_kw,
+       energy_kwh,
+       voltage_v
+     FROM readings
+     WHERE installation_id = ?
+     AND DATE(recorded_at) >= ?
+     AND DATE(recorded_at) <= ?
+     ${whereClause}
+     ORDER BY recorded_at ASC`,
+    [installationId, dateStart, dateEnd, ...params]
+  );
+  return rows;
+}
+
+async function getEnergyGenerationStats(installationId, date, scope) {
+  const { where, params } = scopePredicate(scope);
+  const whereClause = where ? `AND ${where}` : '';
+  const [[stats]] = await pool.execute(
+    `SELECT
+       COUNT(*) as reading_count,
+       MIN(energy_kwh) as energy_min,
+       MAX(energy_kwh) as energy_max,
+       MIN(recorded_at) as first_reading_time,
+       MAX(recorded_at) as last_reading_time
+     FROM readings
+     WHERE installation_id = ?
+     AND DATE(recorded_at) = ?
+     ${whereClause}`,
+    [installationId, date, ...params]
+  );
+  return stats;
+}
+
 module.exports = {
   findAll,
   countAll,
@@ -217,4 +258,6 @@ module.exports = {
   create,
   findLatestByInstallationId,
   getStatisticsByInstallationId,
+  findByInstallationAndDateRange,
+  getEnergyGenerationStats,
 };
