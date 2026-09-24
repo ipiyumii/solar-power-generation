@@ -43,6 +43,11 @@ jobs:
           PUBLIC_BASE_URL=https://example.invalid \
             node -e "require('./lambda.js').handler || process.exit(1)"
 
+          # The runner is x64 but the function is arm64, so the load check above
+          # cannot catch a native binary built for the wrong architecture.
+          test -f node_modules/bcrypt/prebuilds/linux-arm64/bcrypt.glibc.node \
+            || { echo "ERROR: no linux-arm64 bcrypt binary in the package"; exit 1; }
+
           # Zip the contents, not the folder: handler lambda.handler resolves
           # lambda.js at the archive root.
           zip -qr ../lambda-deploy.zip .
