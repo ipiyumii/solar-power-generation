@@ -52,11 +52,11 @@ async function getInstallationById(id, scope) {
   return installation;
 }
 
-async function createInstallation(data) {
-  const substation = await gridSubstationsRepo.findById(data.substation_id, {});
+async function createInstallation(data, scope) {
+  const substation = await gridSubstationsRepo.findById(data.substation_id, scope);
 
   if (!substation) {
-    throw ApiError.badRequest('INVALID_SUBSTATION', `Substation ${data.substation_id} not found.`);
+    throw ApiError.badRequest('SUBSTATION_NOT_FOUND', `Substation ${data.substation_id} not found or outside your jurisdiction.`);
   }
 
   let deviceSecretHash;
