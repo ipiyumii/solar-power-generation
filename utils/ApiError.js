@@ -45,6 +45,10 @@ class ApiError extends Error {
     return new ApiError(412, code, message);
   }
 
+  static tooManyRequests(retryAfterSeconds) {
+    return new ApiError(429, 'RATE_LIMITED', `Too many requests. Retry after ${retryAfterSeconds} seconds.`);
+  }
+
   static unsupportedMediaType() {
     return new ApiError(415, 'UNSUPPORTED_MEDIA_TYPE', 'Request body must be sent as application/json.');
   }

@@ -4,6 +4,7 @@ const express = require('express');
 const validate = require('../middleware/validate');
 const { withLinks } = require('../utils/pagination');
 const requireScope = require('../middleware/requireScope');
+const requirePrincipal = require('../middleware/requirePrincipal');
 const methodNotAllowed = require('../middleware/methodNotAllowed');
 const { idParams, emptyQuery, readingsQuery } = require('../utils/schemas');
 const readingsService = require('../services/readings');
@@ -12,11 +13,11 @@ const readingsService = require('../services/readings');
 // (POST /installations/:id/readings), so this collection is read-only.
 const router = express.Router();
 
-const canRead = requireScope('readings:read');
+const canRead = [requirePrincipal('user'), requireScope('readings:read')];
 
 // GET /readings
 router.route('/')
-  .get(canRead, validate(readingsQuery, 'query'), async (req, res) => {
+  .get(...canRead, validate(readingsQuery, 'query'), async (req, res) => {
     const { limit, offset, sort, ...filters } = req.validated.query;
     res.json(withLinks(req, await readingsService.listReadings(limit, offset, req.scope, sort, filters)));
   })
@@ -24,7 +25,7 @@ router.route('/')
 
 // GET /readings/:id
 router.route('/:id')
-  .get(canRead, validate(idParams, 'params'), validate(emptyQuery, 'query'), async (req, res) => {
+  .get(...canRead, validate(idParams, 'params'), validate(emptyQuery, 'query'), async (req, res) => {
     res.json(await readingsService.getReadingById(req.validated.params.id, req.scope));
   })
   .all(methodNotAllowed('GET, HEAD'));

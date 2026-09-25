@@ -4,12 +4,14 @@ const express = require('express');
 const validate = require('../middleware/validate');
 const { withLinks } = require('../utils/pagination');
 const requireScope = require('../middleware/requireScope');
+const requirePrincipal = require('../middleware/requirePrincipal');
 const { idParams, emptyQuery, listQuery } = require('../utils/schemas');
 const provincesService = require('../services/provinces');
 
 const router = express.Router();
 
-router.use(requireScope('installations:read'));
+// Principal type before scope: a device token is refused on type alone.
+router.use(requirePrincipal('user'), requireScope('installations:read'));
 
 // GET /provinces
 router.get('/', validate(listQuery, 'query'), async (req, res) => {
