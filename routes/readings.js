@@ -2,6 +2,7 @@
 
 const express = require('express');
 const validate = require('../middleware/validate');
+const { withLinks } = require('../utils/pagination');
 const requireScope = require('../middleware/requireScope');
 const methodNotAllowed = require('../middleware/methodNotAllowed');
 const { idParams, emptyQuery, readingsQuery } = require('../utils/schemas');
@@ -17,7 +18,7 @@ const canRead = requireScope('readings:read');
 router.route('/')
   .get(canRead, validate(readingsQuery, 'query'), async (req, res) => {
     const { limit, offset, sort, ...filters } = req.validated.query;
-    res.json(await readingsService.listReadings(limit, offset, req.scope, sort, filters));
+    res.json(withLinks(req, await readingsService.listReadings(limit, offset, req.scope, sort, filters)));
   })
   .all(methodNotAllowed('GET, HEAD'));
 

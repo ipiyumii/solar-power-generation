@@ -2,79 +2,25 @@
 
 const ApiError = require('../utils/ApiError');
 const { resourceUrl } = require('../utils/links');
-const { parseSort } = require('../utils/sortParser');
-const { parseFilters } = require('../utils/filterParser');
+const { orNotFound, listPage } = require('./_shared');
 const readingsRepo = require('../repositories/readings');
-const installationsRepo = require('../repositories/installations');
-
-const definedOnly = (obj) =>
-  obj ? Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) : null;
+const installationsService = require('./installations');
 
 const readingPath = (installationId, readingId) => `/installations/${installationId}/readings/${readingId}`;
 
-async function listReadings(limit, offset, scope, sortParam = null, rawFilters = null) {
-  let sort = null;
-  let filters = null;
-  const filterParams = definedOnly(rawFilters);
-
-  if (sortParam) {
-    try {
-      sort = parseSort(sortParam, 'readings');
-    } catch (err) {
-      throw ApiError.badRequest('INVALID_SORT', err.message);
-    }
-  }
-
-  if (filterParams && Object.keys(filterParams).length > 0) {
-    try {
-      filters = parseFilters(filterParams, 'readings');
-    } catch (err) {
-      throw ApiError.badRequest('INVALID_FILTER', err.message);
-    }
-  }
-
-  const [readings, total] = await Promise.all([
-    readingsRepo.findAll(limit, offset, scope, sort, filters),
-    readingsRepo.countAll(scope, filters),
-  ]);
-
-  return {
-    data: readings,
-    total,
-    limit,
-    offset,
-    sort: sortParam || undefined,
-    filters: filterParams && Object.keys(filterParams).length > 0 ? filterParams : undefined,
-  };
+function listReadings(limit, offset, scope, sortParam = null, filters = null) {
+  return listPage(readingsRepo, 'readings', limit, offset, scope, sortParam, filters);
 }
 
 async function getReadingById(id, scope) {
-  const reading = await readingsRepo.findById(id, scope);
-
-  if (!reading) {
-    throw ApiError.notFound('READING_NOT_FOUND', `Reading ${id} not found.`);
-  }
-
-  return reading;
-}
-
-async function requireInstallation(installationId, scope) {
-  const installation = await installationsRepo.findById(installationId, scope);
-  if (!installation) {
-    throw ApiError.notFound('INSTALLATION_NOT_FOUND', `Installation ${installationId} not found.`);
-  }
-  return installation;
+  return orNotFound(await readingsRepo.findById(id, scope), 'READING_NOT_FOUND', `Reading ${id} not found.`);
 }
 
 // The analytical view: one installation's history, paginated, filtered by
 // time window and sorted. An absent or out-of-scope installation is 404.
-async function listInstallationReadings(installationId, query, scope) {
-  await requireInstallation(installationId, scope);
-  return listReadings(query.limit, query.offset, scope, query.sort, {
-    installation_id: installationId,
-    recorded_at_start: query.recorded_at_start,
-    recorded_at_end: query.recorded_at_end,
-  });
+async function listInstallationReadings(installationId, limit, offset, scope, sortParam = null, filters = null) {
+  await installationsService.getInstallationById(installationId, scope);
+  return listReadings(limit, offset, scope, sortParam, { ...filters, installation_id: installationId });
 }
 
 // A reading exists at this URI only under the installation that owns it.

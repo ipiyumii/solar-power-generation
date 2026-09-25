@@ -1,46 +1,17 @@
 'use strict';
 
-const ApiError = require('../utils/ApiError');
-const { parseSort } = require('../utils/sortParser');
+const { orNotFound, listPage } = require('./_shared');
+const { colomboDay } = require('../utils/colomboTime');
 const districtsRepo = require('../repositories/districts');
-const provincesRepo = require('../repositories/provinces');
-const installationsRepo = require('../repositories/installations');
 const readingsRepo = require('../repositories/readings');
 const gridSubstationsService = require('./gridSubstations');
 
-async function listDistricts(limit, offset, scope, sortParam = null, filters = null) {
-  let sort = null;
-
-  if (sortParam) {
-    try {
-      sort = parseSort(sortParam, 'districts');
-    } catch (err) {
-      throw ApiError.badRequest('INVALID_SORT', err.message);
-    }
-  }
-
-  const [districts, total] = await Promise.all([
-    districtsRepo.findAll(limit, offset, scope, sort, filters),
-    districtsRepo.countAll(scope, filters),
-  ]);
-
-  return {
-    data: districts,
-    total,
-    limit,
-    offset,
-    sort: sortParam || undefined,
-  };
+function listDistricts(limit, offset, scope, sortParam = null, filters = null) {
+  return listPage(districtsRepo, 'districts', limit, offset, scope, sortParam, filters);
 }
 
 async function getDistrictById(id, scope) {
-  const district = await districtsRepo.findById(id, scope);
-
-  if (!district) {
-    throw ApiError.notFound('DISTRICT_NOT_FOUND', `District ${id} not found.`);
-  }
-
-  return district;
+  return orNotFound(await districtsRepo.findById(id, scope), 'DISTRICT_NOT_FOUND', `District ${id} not found.`);
 }
 
 async function listDistrictSubstations(districtId, limit, offset, scope, sortParam = null) {
@@ -48,67 +19,65 @@ async function listDistrictSubstations(districtId, limit, offset, scope, sortPar
   return gridSubstationsService.listGridSubstations(limit, offset, scope, sortParam, { district_id: districtId });
 }
 
-async function getGenerationSummary(districtId, scope) {
-  const district = await districtsRepo.findById(districtId, scope);
+// Devices report every 15 minutes; two missed intervals means the site is no
+// longer telling us what it generates "now".
+const FRESHNESS_MS = 30 * 60 * 1000;
+const round3 = (n) => Number(Number(n).toFixed(3));
 
-  if (!district) {
-    throw ApiError.notFound('DISTRICT_NOT_FOUND', `District ${districtId} not found.`);
-  }
+// The district's generation as of an instant `at` (default: now):
+//  - current power: the sum of each installation's newest reading in the 30
+//    minutes up to `at`; an installation with none is stale and adds nothing.
+//  - today's energy: for each installation, MAX - MIN of the cumulative
+//    counter over the Colombo day containing `at`, up to `at`, then summed.
+//    Summing the counter itself would overstate by orders of magnitude.
+async function getGenerationSummary(districtId, scope, at = new Date()) {
+  const district = await getDistrictById(districtId, scope);
 
-  const today = new Date().toISOString().split('T')[0];
-  const installations = await installationsRepo.findByDistrictId(districtId, scope);
+  const day = colomboDay(at);
+  const dayEnd = at < day.end ? new Date(at.getTime() + 1) : day.end; // readings at `at` count
+  const freshFrom = new Date(at.getTime() - FRESHNESS_MS);
 
-  const results = await Promise.all(
-    installations.map(async (installation) => {
-      const stats = await readingsRepo.getEnergyGenerationStats(
-        installation.installation_id,
-        today,
-        scope
-      );
+  const [energyRows, latestRows] = await Promise.all([
+    readingsRepo.districtEnergyByInstallation(districtId, day.start, dayEnd),
+    readingsRepo.districtLatestReadings(districtId, freshFrom, at),
+  ]);
 
-      const energyGenerated = stats.reading_count > 0
-        ? parseFloat((stats.energy_max - stats.energy_min).toFixed(2))
-        : null;
+  const latestById = new Map(latestRows.map((r) => [r.installation_id, r]));
 
-      return {
-        installation_id: installation.installation_id,
-        reference: installation.reference,
-        status: installation.status,
-        capacity_kw: installation.capacity_kw,
-        energy_generated_kwh: energyGenerated,
-        reading_count: stats.reading_count,
-        first_reading_time: stats.first_reading_time,
-        last_reading_time: stats.last_reading_time,
-        is_stale: stats.reading_count === 0,
-      };
-    })
-  );
+  const installations = energyRows.map((row) => {
+    const latest = latestById.get(row.installation_id);
+    return {
+      installation_id: row.installation_id,
+      reference: row.reference,
+      status: row.status,
+      capacity_kw: row.capacity_kw,
+      current_power_kw: latest ? round3(latest.power_kw) : null,
+      last_reading_at: latest ? latest.recorded_at : null,
+      energy_today_kwh: row.reading_count > 0 ? round3(row.energy_kwh) : 0,
+      readings_today: row.reading_count,
+      is_stale: !latest,
+    };
+  });
 
-  const activeInstallations = results.filter(r => !r.is_stale);
-  const staleInstallations = results.filter(r => r.is_stale);
-
-  const totalEnergyGenerated = activeInstallations.reduce(
-    (sum, inst) => sum + (inst.energy_generated_kwh || 0),
-    0
-  );
+  const reporting = installations.filter((i) => !i.is_stale);
 
   return {
     district: {
-      id: district.district_id,
+      district_id: district.district_id,
       name: district.name,
       province_id: district.province_id,
     },
-    date: today,
+    as_of: at.toISOString(),
+    date: day.date,
+    timezone: 'Asia/Colombo',
     summary: {
-      total_energy_generated_kwh: parseFloat(totalEnergyGenerated.toFixed(2)),
-      active_installations_count: activeInstallations.length,
-      stale_installations_count: staleInstallations.length,
-      total_installations_count: results.length,
+      current_total_power_kw: round3(reporting.reduce((sum, i) => sum + i.current_power_kw, 0)),
+      today_total_energy_kwh: round3(installations.reduce((sum, i) => sum + i.energy_today_kwh, 0)),
+      installations_total: installations.length,
+      installations_reporting: reporting.length,
+      installations_stale: installations.length - reporting.length,
     },
-    installations: {
-      active: activeInstallations,
-      stale: staleInstallations,
-    },
+    installations,
   };
 }
 

@@ -4,8 +4,8 @@ const crypto = require('node:crypto');
 const { hash } = require('bcrypt');
 const ApiError = require('../utils/ApiError');
 const { checkIfMatch } = require('../utils/etag');
-const { parseSort } = require('../utils/sortParser');
-const { parseFilters } = require('../utils/filterParser');
+const { colomboDay } = require('../utils/colomboTime');
+const { orNotFound, listPage } = require('./_shared');
 const installationsRepo = require('../repositories/installations');
 const gridSubstationsRepo = require('../repositories/gridSubstations');
 const readingsRepo = require('../repositories/readings');
@@ -14,53 +14,12 @@ const districtsRepo = require('../repositories/districts');
 
 const BCRYPT_COST = 12;
 
-const definedOnly = (obj) =>
-  obj ? Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) : null;
-
-async function listInstallations(limit, offset, scope, sortParam = null, rawFilters = null) {
-  let sort = null;
-  let filters = null;
-  const filterParams = definedOnly(rawFilters);
-
-  if (sortParam) {
-    try {
-      sort = parseSort(sortParam, 'installations');
-    } catch (err) {
-      throw ApiError.badRequest('INVALID_SORT', err.message);
-    }
-  }
-
-  if (filterParams && Object.keys(filterParams).length > 0) {
-    try {
-      filters = parseFilters(filterParams, 'installations');
-    } catch (err) {
-      throw ApiError.badRequest('INVALID_FILTER', err.message);
-    }
-  }
-
-  const [installations, total] = await Promise.all([
-    installationsRepo.findAll(limit, offset, scope, sort, filters),
-    installationsRepo.countAll(scope, filters),
-  ]);
-
-  return {
-    data: installations,
-    total,
-    limit,
-    offset,
-    sort: sortParam || undefined,
-    filters: filterParams && Object.keys(filterParams).length > 0 ? filterParams : undefined,
-  };
+function listInstallations(limit, offset, scope, sortParam = null, filters = null) {
+  return listPage(installationsRepo, 'installations', limit, offset, scope, sortParam, filters);
 }
 
 async function getInstallationById(id, scope) {
-  const installation = await installationsRepo.findById(id, scope);
-
-  if (!installation) {
-    throw ApiError.notFound('INSTALLATION_NOT_FOUND', `Installation ${id} not found.`);
-  }
-
-  return installation;
+  return orNotFound(await installationsRepo.findById(id, scope), 'INSTALLATION_NOT_FOUND', `Installation ${id} not found.`);
 }
 
 // A unique-key clash is a conflict with existing state, not a malformed request.
@@ -115,11 +74,7 @@ async function createInstallation(data, scope) {
 // Loads the current representation and applies If-Match to it before any
 // write happens, so a stale client gets 412 and the row is left untouched.
 async function loadForWrite(id, scope, ifMatch) {
-  const current = await installationsRepo.findById(id, scope);
-
-  if (!current) {
-    throw ApiError.notFound('INSTALLATION_NOT_FOUND', `Installation ${id} not found.`);
-  }
+  const current = await getInstallationById(id, scope);
 
   checkIfMatch(ifMatch, current);
   return current;
@@ -176,18 +131,17 @@ async function deleteInstallation(id, scope, ifMatch) {
 }
 
 async function getInstallationOverview(id, scope) {
-  const installation = await installationsRepo.findById(id, scope);
+  const installation = await getInstallationById(id, scope);
 
-  if (!installation) {
-    throw ApiError.notFound('INSTALLATION_NOT_FOUND', `Installation ${id} not found.`);
-  }
+  const today = colomboDay(new Date());
 
-  const [substation, latestReading, readingsStats, province, district] = await Promise.all([
+  const [substation, latestReading, readingsStats, province, district, todayEnergy] = await Promise.all([
     gridSubstationsRepo.findById(installation.substation_id, scope),
     readingsRepo.findLatestByInstallationId(id, scope),
     readingsRepo.getStatisticsByInstallationId(id, scope),
     provincesRepo.findById(installation.province_id, {}),
     districtsRepo.findById(installation.district_id, {}),
+    readingsRepo.energyBetween(id, today.start, today.end, scope),
   ]);
 
   return {
@@ -207,10 +161,20 @@ async function getInstallationOverview(id, scope) {
         max: readingsStats.power_max,
         avg: readingsStats.power_avg ? parseFloat(readingsStats.power_avg.toFixed(2)) : null,
       },
+      // energy_kwh is a cumulative counter: its latest value is the lifetime
+      // total, and a period's energy is last - first. An average of the
+      // counter has no physical meaning, so none is reported.
       energy_kwh: {
-        min: readingsStats.energy_min,
-        max: readingsStats.energy_max,
-        avg: readingsStats.energy_avg ? parseFloat(readingsStats.energy_avg.toFixed(2)) : null,
+        lifetime: latestReading ? latestReading.energy_kwh : null,
+        in_recorded_history: readingsStats.total_count > 0
+          ? Number((readingsStats.energy_max - readingsStats.energy_min).toFixed(3))
+          : null,
+        today: {
+          date: today.date,
+          timezone: 'Asia/Colombo',
+          energy_kwh: todayEnergy.reading_count > 0 ? Number(Number(todayEnergy.energy_kwh).toFixed(3)) : 0,
+          reading_count: todayEnergy.reading_count,
+        },
       },
       voltage_v: {
         min: readingsStats.voltage_min,
@@ -229,11 +193,7 @@ async function getInstallationOverview(id, scope) {
 }
 
 async function getLastKnownReading(id, scope) {
-  const installation = await installationsRepo.findById(id, scope);
-
-  if (!installation) {
-    throw ApiError.notFound('INSTALLATION_NOT_FOUND', `Installation ${id} not found.`);
-  }
+  const installation = await getInstallationById(id, scope);
 
   const reading = await readingsRepo.findLatestByInstallationId(id, scope);
 

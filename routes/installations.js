@@ -4,6 +4,7 @@ const express = require('express');
 const ApiError = require('../utils/ApiError');
 const { resourceUrl } = require('../utils/links');
 const validate = require('../middleware/validate');
+const { withLinks } = require('../utils/pagination');
 const requireScope = require('../middleware/requireScope');
 const requirePrincipal = require('../middleware/requirePrincipal');
 const methodNotAllowed = require('../middleware/methodNotAllowed');
@@ -31,7 +32,7 @@ const noQuery = validate(emptyQuery, 'query');
 // GET /installations
 router.get('/', canRead, validate(installationsQuery, 'query'), async (req, res) => {
   const { limit, offset, sort, ...filters } = req.validated.query;
-  res.json(await installationsService.listInstallations(limit, offset, req.scope, sort, filters));
+  res.json(withLinks(req, await installationsService.listInstallations(limit, offset, req.scope, sort, filters)));
 });
 
 // POST /installations — the device secret is in this response and nowhere else.
@@ -76,7 +77,10 @@ router.get('/:id/last-known-reading', canRead, byId, noQuery, async (req, res) =
 // ingestion point.
 router.route('/:id/readings')
   .get(requireScope('readings:read'), byId, validate(installationReadingsQuery, 'query'), async (req, res) => {
-    res.json(await readingsService.listInstallationReadings(req.validated.params.id, req.validated.query, req.scope));
+    const { limit, offset, sort, ...filters } = req.validated.query;
+    res.json(withLinks(req, await readingsService.listInstallationReadings(
+      req.validated.params.id, limit, offset, req.scope, sort, filters
+    )));
   })
   .post(
     requirePrincipal('device'),
