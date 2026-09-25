@@ -20,6 +20,7 @@ seed-credentials.local.json
 
 # Build output
 build/
+COMMIT
 
 # Local test artefacts: generate-tokens.js holds a literal signing secret
 generate-tokens.js

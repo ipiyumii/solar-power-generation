@@ -1,8 +1,15 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { z } = require('zod');
 
 require('dotenv').config();
+
+// CI writes the deployed commit SHA into the package, so /health can say
+// which commit is live without CI rewriting the function's environment.
+const COMMIT_FILE = path.join(__dirname, '..', 'COMMIT');
+const packagedCommit = fs.existsSync(COMMIT_FILE) ? fs.readFileSync(COMMIT_FILE, 'utf8').trim() : 'unknown';
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -28,7 +35,7 @@ const schema = z.object({
   JWT_USER_TTL: z.string().default('8h'),
   JWT_DEVICE_TTL: z.string().default('1h'),
 
-  GIT_COMMIT: z.string().default('unknown'),
+  GIT_COMMIT: z.string().default(packagedCommit),
 });
 
 const parsed = schema.safeParse(process.env);

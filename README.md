@@ -6,121 +6,70 @@ Built for the **Sri Lanka Sustainable Energy Authority (SLSEA)**, Ministry of En
 
 | | |
 |---|---|
-| **Live API** | `https://<id>.<region>.awsapprunner.com/api/v1` — *fill in once deployed* |
-| **OpenAPI / Swagger** | `https://<id>.<region>.awsapprunner.com/api/v1/docs` |
-| **Health** | `https://<id>.<region>.awsapprunner.com/health` |
-| **Status** | In development |
-| **Full specification** | [project.md](docs/project.md) |
+| **Live API** | `https://4qfu2ftwie.execute-api.us-east-1.amazonaws.com/api/v1` |
+| **Health** | [`https://4qfu2ftwie.execute-api.us-east-1.amazonaws.com/health`](https://4qfu2ftwie.execute-api.us-east-1.amazonaws.com/health) |
+| **OpenAPI / Swagger** | `/api/v1/docs` — *in progress* |
+| **Hosting** | AWS Lambda + API Gateway (HTTP API) + RDS MySQL 8, `us-east-1` |
 
-**Documentation:** [project.md](docs/project.md) (purpose, requirements, constraints) · [ARCHITECTURE.md](docs/ARCHITECTURE.md) (layers, request lifecycle) · [API_DESIGN.md](docs/API_DESIGN.md) (endpoints, methods, status codes) · [DATABASE.md](docs/DATABASE.md) (schema, indexes, seed) · [SECURITY.md](docs/SECURITY.md) (threat model, JWT, jurisdiction scoping) · [DEPLOYMENT.md](docs/DEPLOYMENT.md) (AWS topology, RDS, going live)
+> This is a backend service only. No dashboard, BI tool or client application is part of the deliverable — the OpenAPI surface is the interface.
 
-> This is a backend service only. No dashboard, BI tool or client application is part of the deliverable — **the OpenAPI surface is the interface**.
+```bash
+curl https://4qfu2ftwie.execute-api.us-east-1.amazonaws.com/health
+# {"status":"ok","version":"1.0.0","commit":"<deployed git sha>","database":"connected","uptime_seconds":42}
+```
+
+`/health` queries the database on every call, so `"database":"connected"` means the API can actually serve data, and `commit` is the Git commit the running code was built from.
 
 ---
 
 ## What it does
 
-1. **Acquires** generation readings pushed by smart meters and inverters, one per installation every 15 minutes.
-2. **Serves** those readings plus the surrounding geographic and asset hierarchy to SLSEA staff, scoped to the jurisdiction each user is responsible for.
-3. **Documents itself** through an OpenAPI 3.1 surface served from the deployment.
+1. **Acquires** generation readings pushed by smart meters, one per installation every 15 minutes.
+2. **Serves** those readings and the surrounding geographic and asset hierarchy to SLSEA staff, scoped to the jurisdiction each user is responsible for.
 
 ### The write–read split
-
-Two client classes exist and they never overlap. This drives the entire security model.
 
 | Client | Identity | Can | Cannot |
 |---|---|---|---|
 | **Metering device** | Authenticates as one installation | Push readings **for that installation only** | Read anything; write anything else |
-| **SLSEA user** | Authenticates as a person with a jurisdiction | Read data **within that jurisdiction** | Write readings, ever |
-
-The data producer (the device) and the data consumer (the analyst) are different parties with different permissions.
+| **SLSEA user** | Authenticates as a person with a jurisdiction | Read data **within that jurisdiction** | Write readings |
 
 ### Two consumer scopes
 
-| Scope | Question it answers | Shape |
+| Scope | Question | Endpoints |
 |---|---|---|
-| **Operational** | *What is generating right now?* | Last-known-reading per installation; district generation summary |
-| **Analytical** | *How has generation behaved over time and by region?* | Readings history with pagination, filtering, sorting and conditional GET |
-
----
-
-## Quickstart
-
-```bash
-git clone <repo-url> && cd solar-power-generation
-npm ci
-cp .env.example .env          # then fill in the DB_* variables and JWT_SECRET
-npm run migrate               # create the schema
-npm run seed -- --fresh       # 147,840 readings, takes 2-4 minutes
-npm start                     # http://localhost:5000
-```
-
-Local development needs a MySQL 8 instance. The quickest is Docker:
-
-```bash
-docker run --name slsea-mysql -p 3306:3306 -d \n  -e MYSQL_ROOT_PASSWORD=dev -e MYSQL_DATABASE=slsea mysql:8
-```
-
-Generate a signing secret:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
-```
-
-### Environment
-
-| Variable | Required | Purpose |
-|---|---|---|
-| `DB_HOST` | yes | MySQL host — the RDS endpoint in production |
-| `DB_PORT` | no | Defaults to `3306` |
-| `DB_NAME` | yes | `slsea` |
-| `DB_USER` | yes | `slsea_app` in production — no DDL rights |
-| `DB_PASSWORD` | yes | From AWS Secrets Manager in production |
-| `JWT_SECRET` | yes | HS256 signing secret, 256 bits or longer |
-| `JWT_USER_TTL` | yes | User token lifetime, e.g. `8h` |
-| `JWT_DEVICE_TTL` | yes | Device token lifetime, e.g. `1h` |
-| `PUBLIC_BASE_URL` | **yes in production** | Base URL for pagination links. Unset, every link points at `localhost` |
-| `NODE_ENV` | yes | `development` / `production` |
-| `PORT` | no | Defaults to `5000`; **injected by App Runner** in production, so it must be read rather than hard-coded |
-
-`.env` is never committed.
+| **Operational** | *What is generating right now?* | `/installations/{id}/last-known-reading`, `/districts/{id}/generation-summary` |
+| **Analytical** | *How has generation behaved over time and by region?* | `/installations/{id}/readings`, `/readings` — paginated, filtered, sorted, conditional |
 
 ---
 
 ## Authenticating
 
-Both client types use JWT bearer tokens over HTTPS. The token is always sent in the `Authorization` header — **never** in a query string.
-
-**SLSEA user (read path):**
+JWT bearer tokens (HS256) over HTTPS, always in the `Authorization` header — never in a query string.
 
 ```bash
-curl -X POST https://<host>/api/v1/auth/login \
+# SLSEA user -> user token
+curl -X POST https://4qfu2ftwie.execute-api.us-east-1.amazonaws.com/api/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"analyst.kandy@slsea.lk","password":"..."}'
-```
+  -d '{"email":"kandy.officer@slsea.lk","password":"..."}'
 
-**Metering device (write path):**
-
-```bash
-curl -X POST https://<host>/api/v1/auth/device-token \
+# Metering device -> device token
+curl -X POST https://4qfu2ftwie.execute-api.us-east-1.amazonaws.com/api/v1/auth/device-token \
   -H 'Content-Type: application/json' \
   -d '{"meter_id":"MTR-000042","device_secret":"..."}'
-```
 
-Then:
-
-```bash
-curl https://<host>/api/v1/installations/42/last-known-reading \
+# Then
+curl https://4qfu2ftwie.execute-api.us-east-1.amazonaws.com/api/v1/installations/61/last-known-reading \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-A device token can never satisfy a read route, and a user token can never satisfy the ingestion route — the principal *type* is checked before any scope is examined.
+Seeded accounts: a national analyst, a Central provincial officer, Kandy and Colombo district officers, and an admin. Their credentials are generated at seed time and supplied with the submission, not stored in this repository.
 
 ---
 
 ## Endpoints
 
-All paths are under `/api/v1`. Full contracts, headers and status codes are in [project.md §4–§5](docs/project.md#4-main-features--the-design-spine).
+All paths are under `/api/v1`.
 
 ### Hierarchy and assets
 
@@ -138,37 +87,38 @@ All paths are under `/api/v1`. Full contracts, headers and status codes are in [
 
 | Method | Path | Kind |
 |---|---|---|
-| `GET` | `/installations/{id}/overview` | **Composite** — installation + jurisdiction chain + last reading + today's energy |
-| `GET` | `/installations/{id}/last-known-reading` | **Processing** — the operational "right now" view |
-| `GET` | `/installations/{id}/readings` | **Scoped collection** — paginated, filtered, sorted, conditional |
+| `GET` | `/installations/{id}/overview` | **Composite** — installation, its jurisdiction chain, latest reading, lifetime and today's energy |
+| `GET` | `/installations/{id}/last-known-reading` | **Processing** — the most recent reading, derived from the series |
+| `GET` | `/installations/{id}/readings` | **Scoped collection** — one installation's history |
 | `GET` | `/installations/{id}/readings/{reading_id}` | Atomic |
-| `GET` | `/readings` | Cross-asset history |
-| `GET` | `/districts/{id}/generation-summary` | **Processing** — aggregate district generation |
+| `GET` | `/readings` · `/readings/{id}` | Estate-wide history |
+| `GET` | `/districts/{id}/generation-summary` | **Processing** — current total power and today's energy for a district |
 
 ### Write path
 
 | Method | Path | Principal | Success |
 |---|---|---|---|
-| `POST` | `/installations/{id}/readings` | Device | `201` + `Location` |
-| `POST` | `/installations` | Admin | `201` + `Location` |
-| `PUT` | `/installations/{id}` | Admin | `200` — full replacement |
+| `POST` | `/installations/{id}/readings` | Device (its own installation only) | `201` + `Location` |
+| `POST` | `/installations` | Admin | `201` + `Location`; the new device secret is returned once |
+| `PUT` | `/installations/{id}` | Admin | `200` — full replacement, every mutable field required |
 | `PATCH` | `/installations/{id}` | Admin | `200` — partial update |
-| `DELETE` | `/installations/{id}` | Admin | `204` |
-| `PUT`/`PATCH`/`DELETE` | `/installations/{id}/readings/{reading_id}` | — | `405` + `Allow: GET, HEAD` |
+| `DELETE` | `/installations/{id}` | Admin | `204`; `409` if it has readings |
+| any mutation | `/installations/{id}/readings/{reading_id}` | — | `405` + `Allow: GET, HEAD` |
 
-Readings are **append-only**. A replayed reading returns `409 Conflict` with a `Location` header pointing at the existing resource.
+Readings are **append-only**. A replayed reading (same installation and `recorded_at`) returns `409 Conflict` with a `Location` header pointing at the reading already stored. The database enforces the same rule: the application's MySQL user holds only `SELECT, INSERT` on `readings`.
 
 ### Query parameters
 
 | Parameter | Applies to | Example |
 |---|---|---|
-| `page`, `limit` | Any collection | `?page=3&limit=50` |
-| `province_id`, `district_id`, `substation_id` | Jurisdiction filter | `?district_id=11` |
-| `from`, `to` | Time window, ISO 8601 | `?from=2026-09-01T00:00:00Z&to=2026-09-08T00:00:00Z` |
-| `sort` | Readings | `?sort=recorded_at` · `?sort=-recorded_at` |
+| `limit` (1–200, default 50), `offset` | Every collection | `?limit=50&offset=100` |
+| `province_id`, `district_id`, `substation_id` | Jurisdiction filter — installations, readings, districts, substations | `?district_id=4` |
+| `recorded_at_start`, `recorded_at_end` | Time window on readings, ISO 8601 with offset | `?recorded_at_start=2026-09-20T00:00:00+05:30` |
+| `sort` | Collections, `field:asc` or `field:desc` | `?sort=recorded_at:asc` |
 | `status` | Installations | `?status=active` |
+| `at` | District summary — compute "as of" this instant (default: now) | `?at=2026-09-24T12:00:00+05:30` |
 
-Query schemas are **strict** — an unknown or misspelled parameter returns `400`, never unfiltered data.
+Query schemas are **strict**: an unknown or misspelled parameter returns `400`, never unfiltered data. A filter can only narrow a user's jurisdiction, never widen it.
 
 ---
 
@@ -179,45 +129,74 @@ Query schemas are **strict** — an unknown or misspelled parameter returns `400
 ```json
 {
   "data": [ ],
-  "pagination": { "total_count": 147840, "page": 3, "limit": 50, "total_pages": 2957 },
-  "links": { "self": "...", "next": "...", "prev": "...", "first": "...", "last": "..." }
+  "pagination": { "total_count": 672, "limit": 50, "offset": 50, "returned": 50 },
+  "links": {
+    "self":  "https://…/api/v1/installations/61/readings?limit=50&offset=50",
+    "first": "https://…/api/v1/installations/61/readings?limit=50&offset=0",
+    "prev":  "https://…/api/v1/installations/61/readings?limit=50&offset=0",
+    "next":  "https://…/api/v1/installations/61/readings?limit=50&offset=100",
+    "last":  "https://…/api/v1/installations/61/readings?limit=50&offset=650"
+  }
 }
 ```
 
-**Error** — one schema for every client error across the whole API:
+`prev` is `null` on the first page and `next` on the last. Links are absolute, built from `PUBLIC_BASE_URL`, and keep the request's filters and sort.
+
+**Error** — one schema for every error the application returns:
 
 ```json
 {
   "error": {
     "code": "VALIDATION_FAILED",
-    "message": "One or more query parameters are invalid.",
-    "details": [ { "field": "limit", "issue": "must be an integer between 1 and 200" } ],
-    "request_id": "01JB2K8Q3F5N7X",
-    "timestamp": "2026-09-19T08:41:02+00:00"
+    "message": "Invalid query parameters.",
+    "details": [ { "field": "distrct_id", "issue": "is not a recognised parameter" } ],
+    "request_id": "2f6c1e9a-…",
+    "timestamp": "2026-09-25T08:41:02.000Z"
   }
 }
 ```
 
-**Caching** — retrievable resources carry `ETag` and `Last-Modified`. Send `If-None-Match` and an unchanged resource returns `304` with an empty body.
+**Caching** — single resources carry `ETag` and `Last-Modified`, collection pages carry `ETag`. `If-None-Match` or `If-Modified-Since` on an unchanged resource returns `304` with an empty body. A write with a stale `If-Match` returns `412` and changes nothing.
+
+**Status codes used:** `200` `201` `204` `304` `400` `401` `403` `404` `405` `406` `409` `412` `413` `415` `500`.
+
+A cross-jurisdiction **read** returns `404`, identical to a missing resource — a `403` would confirm the resource exists. The device write path is the deliberate exception: a device posting to an installation that is not its own gets `403`.
 
 ---
 
-## Project layout
+## Running locally
 
-```
-.
-├── index.js              # app composition, middleware order, graceful start
-├── router/               # parse, validate, delegate, respond — no queries here
-├── services/             # business rules — never touches req or res
-├── repositories/         # the only place that writes SQL
-├── middleware/           # auth, jurisdiction scope, error handler, not-found
-├── utils/                # jwt, etag, pagination links
-├── db/                   # pool, schema.sql, migrations, seeder
-├── docs/openapi.yaml     # the contract — updated in the same commit as any change
-└── project.md            # full specification and rubric traceability
+Requires Node.js 22+ and MySQL 8.
+
+```bash
+git clone https://github.com/ipiyumii/solar-power-generation.git
+cd solar-power-generation
+npm ci
+cp .env.example .env          # fill in the values
+npm run migrate               # build or upgrade the schema
+npm run seed -- --fresh       # 9 provinces, 25 districts, 25 substations, 220 installations, 147,840 readings
+npm start                     # http://localhost:5000
 ```
 
-**Layering is an invariant:** Controller → Service → Repository. Routers never build a query; services never see `req`/`res`; repositories are the only code that writes SQL, and they use explicit column lists — never `SELECT *` — so `password_hash` and `device_secret_hash` are never fetched at all.
+`npm run migrate` builds an empty database from `db/schema.sql`, or applies any pending file in `db/migrations/` to an existing one. It uses `DB_ADMIN_USER` / `DB_ADMIN_PASSWORD` when set, so the application user never needs DDL rights.
+
+`npm run seed -- --fresh` replaces all data and writes the generated user passwords and device secrets to `seed-credentials.local.json` (git-ignored). Only bcrypt hashes reach the database.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `NODE_ENV` | no | `development` (default) or `production`. Production enforces TLS to RDS and a `JWT_SECRET` |
+| `PORT` | no | Local port, default `5000` |
+| `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | yes | MySQL connection. Connections to `*.rds.amazonaws.com` verify the certificate against `db/rds-ca-bundle.pem` |
+| `DB_ADMIN_USER`, `DB_ADMIN_PASSWORD` | no | Used only by `npm run migrate` |
+| `PUBLIC_BASE_URL` | yes | Public origin for `Location` headers and pagination links. No default, so a deployment can never emit `localhost` links |
+| `JWT_SECRET` | yes in production | HS256 signing secret, at least 32 characters |
+| `JWT_USER_TTL`, `JWT_DEVICE_TTL` | no | Token lifetimes, default `8h` and `1h` |
+
+Generate a signing secret:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+```
 
 ---
 
@@ -225,63 +204,73 @@ Query schemas are **strict** — an unknown or misspelled parameter returns `400
 
 | Element | Count |
 |---|---|
-| Provinces | 9 (the real Sri Lankan provinces) |
-| Districts | 25 (correctly mapped to their provinces) |
+| Provinces | 9 — the real provinces of Sri Lanka |
+| Districts | 25 — the real districts, each in its correct province |
 | Grid substations | 25 |
-| Solar installations | 220 |
-| Generation readings | 672 per installation (one per 15 min × 7 days) = **147,840** |
+| Solar installations | 220, weighted toward the western and central urban areas |
+| Generation readings | 672 per installation (every 15 minutes for 7 days) = **147,840** |
 
-Readings follow a realistic diurnal curve — rising through the morning, peaking near midday, zero overnight. `energy_kwh` is a **cumulative lifetime counter** and is monotonic non-decreasing per installation. Foreign keys, `UNIQUE` and `CHECK` constraints make orphans, duplicate readings and negative power impossible rather than merely unlikely.
+Power follows the Sri Lankan day: zero overnight, rising from 06:00, peaking near midday, falling to zero by 18:15 (Asia/Colombo). `energy_kwh` is a **cumulative lifetime counter**, monotonic per installation, so a period's energy is `last − first`, never a sum.
 
 ```bash
-npm run seed -- --fresh    # rebuild from scratch
-npm run seed -- --verify   # row counts, orphans, monotonicity, duplicate keys
+npm run seed:verify    # 16 integrity checks: counts, orphans, jurisdiction consistency,
+                       # duplicates, monotonic energy, zero night-time power, bcrypt-only secrets
 ```
 
-> **Reading the data correctly:** daily energy for an installation is `last − first` over the window, **not** a sum of `energy_kwh`. Summing a cumulative counter across 96 rows per day overstates generation by orders of magnitude.
+Foreign keys — including composite keys that tie each substation's and installation's district and province to their parent — plus `UNIQUE` and `CHECK` constraints make orphans, duplicate readings and mismatched jurisdictions impossible at the database, not merely unlikely.
 
 ---
 
-## Scripts
+## Project layout
 
-```bash
-npm start                 # run locally on :5000
-npm run migrate           # apply db/migrations
-npm run seed -- --fresh   # rebuild fixtures (add --force against production)
-npm run seed -- --verify  # data integrity report
-npm run smoke             # end-to-end checks against $PUBLIC_BASE_URL
-npm run lint
+```
+.
+├── app.js                 # Express app: middleware order and routers
+├── index.js               # local entry point (binds PORT)
+├── lambda.js              # AWS Lambda entry point (serverless-http)
+├── config/env.js          # environment validation; refuses to start if misconfigured
+├── routes/                # URLs, validation, response codes and headers — no SQL
+├── services/              # business rules — never touches req or res
+├── repositories/          # the only place that writes SQL; explicit column lists, no SELECT *
+├── middleware/            # authentication, scopes, jurisdiction, validation, ETag, errors
+├── utils/                 # schemas, error type, ETag, pagination links, time zone
+├── db/                    # client, schema.sql, migrations, RDS CA bundle
+├── scripts/               # migrate, seed
+└── .github/workflows/     # build, package and deploy to Lambda on push to main
 ```
 
-Before claiming anything works, run `npm run smoke` against the deployed URL and report what actually happened.
+Routers never build a query, services never see `req`/`res`, and repositories use explicit column lists, so `password_hash` and `device_secret_hash` are never fetched into a response path at all.
+
+---
+
+## Deployment
+
+```
+Internet ──HTTPS──► API Gateway HTTP API ──► Lambda (Node.js, arm64)
+                    (managed TLS,             │  TLS, certificate verified
+                     throttling)              ▼
+                                        RDS MySQL 8
+```
+
+Every push to `main` runs [.github/workflows/aws-lambda.yml](.github/workflows/aws-lambda.yml), which:
+
+1. packages the application and stamps it with the commit SHA,
+2. loads the Lambda handler from the package, failing the build on a missing module,
+3. refuses to deploy if the credentials belong to a known non-coursework AWS account,
+4. deploys, then fails unless `/health` answers `200` **and** reports the commit just deployed.
+
+The Lambda connects to RDS as `slsea_app`, a least-privilege user with no DDL rights, `SELECT, INSERT` only on `readings`, and a TLS requirement enforced by MySQL itself.
 
 ---
 
 ## Design position
 
-The API targets **Richardson Maturity Level 2** — resources, correct HTTP methods, correct status codes and headers. Level 3 (hypermedia) is deliberately out of scope: pagination links are collection navigation, not state-transition affordances, and the named consumers are BI pipelines with compile-time knowledge of the contract. The reasoning is set out in [project.md §10](docs/project.md#10-richardson-maturity-placement).
-
-A cross-jurisdiction **read** returns `404`, not `403` — a `403` would confirm existence and let a district user enumerate the national estate. The device write path is the one deliberate exception and returns `403`, because a device already knows its own installation exists.
-
----
-
-## Deploying
-
-Two deployables with different lifecycles: the **database** is provisioned once and persists; the **application** is rebuilt on every push. The schema and seed must be loaded into the deployed database — *"operational against seed data"* is an eligibility-gate requirement, and an app pointing at an empty RDS instance returns `[]` from every endpoint.
-
-```
-Internet ──HTTPS──> App Runner (Node 24, auto-deploy on push)
-                         │ VPC connector, port 3306
-                         ▼
-                    RDS MySQL 8 (db.t4g.micro, free tier)
-```
-
-Full walkthrough — RDS setup, security groups, secrets, seeding the live database, cost, and the runbook — is in [DEPLOYMENT.md](docs/DEPLOYMENT.md).
+The API targets **Richardson Maturity Level 2**: individually addressable resources, HTTP methods used for their defined semantics, and specific status codes and headers. Level 3 (hypermedia) is out of scope: the pagination links navigate a collection, but a client cannot discover `last-known-reading` or `generation-summary` from a representation — it needs the OpenAPI contract.
 
 ---
 
 ## Academic context
 
-Coursework for **NB6007CEM Web API Development** — BSc (Hons) Computing (Software Engineering), Level 6, Coventry University / NIBM. Assessed on architecture, API design, coverage, implementation, functionality against seed data, deployment, security and report quality.
+Coursework for **NB6007CEM Web API Development** — BSc (Hons) Computing (Software Engineering), Level 6, Coventry University / NIBM.
 
-AI-assisted code generation is permitted and expected on this module; disclosure is mandatory. Prompts, AI-aids and the critique log of generator faults found and repaired are recorded in the report appendix — see [project.md §13](docs/project.md#13-ai-disclosure-and-viva-preparation).
+AI-assisted code generation is permitted on this module and disclosed in the report appendix, including the generator faults found and repaired.

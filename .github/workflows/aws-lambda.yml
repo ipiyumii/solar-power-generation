@@ -33,6 +33,9 @@ jobs:
             exit 1
           fi
 
+          # Read by config/env.js and reported by /health.
+          echo "$GITHUB_SHA" > build/lambda/COMMIT
+
           cd build/lambda
           npm install --omit=dev --no-audit --no-fund
 
@@ -94,6 +97,9 @@ jobs:
 
           echo "Testing: $INVOKE_URL/health"
           # Retries absorb a cold start; a failure after that fails the job.
-          curl -fsS --retry 5 --retry-delay 5 --retry-all-errors "$INVOKE_URL/health"
-          echo
-          echo "✓ Health check passed"
+          BODY=$(curl -fsS --retry 5 --retry-delay 5 --retry-all-errors "$INVOKE_URL/health")
+          echo "$BODY"
+          # The live function must be the commit this job just packaged.
+          echo "$BODY" | grep -q "\"commit\":\"$GITHUB_SHA\"" \
+            || { echo "ERROR: /health does not report commit $GITHUB_SHA"; exit 1; }
+          echo "✓ Health check passed for $GITHUB_SHA"
