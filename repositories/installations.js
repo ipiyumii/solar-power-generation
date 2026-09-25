@@ -122,36 +122,6 @@ async function findById(id, scope) {
   return rows.length > 0 ? rows[0] : null;
 }
 
-async function findByDistrictId(districtId, scope) {
-  const { where, params } = scopePredicate(scope);
-  const whereClause = where ? `AND ${where}` : '';
-  const [rows] = await pool.execute(
-    `SELECT
-       installation_id,
-       reference,
-       meter_id,
-       inverter_id,
-       capacity_kw,
-       panel_count,
-       status,
-       commissioned_on,
-       address_line,
-       latitude,
-       longitude,
-       substation_id,
-       district_id,
-       province_id,
-       created_at,
-       updated_at
-     FROM installations
-     WHERE district_id = ?
-     ${whereClause}
-     ORDER BY installation_id ASC`,
-    [districtId, ...params]
-  );
-  return rows;
-}
-
 // Internal lookup for device authentication: includes device_secret_hash for verification.
 // Never expose this method's result through an API response.
 async function findDeviceSecretByMeterId(meterId) {
@@ -265,7 +235,6 @@ module.exports = {
   findAll,
   countAll,
   findById,
-  findByDistrictId,
   findDeviceSecretByMeterId,
   create,
   update,

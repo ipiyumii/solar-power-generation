@@ -44,8 +44,19 @@ const installationsQuery = z.strictObject({
   status: z.enum(STATUS).optional(),
 });
 const substationInstallationsQuery = z.strictObject({ ...page, status: z.enum(STATUS).optional() });
-const readingsQuery = z.strictObject({ ...page, installation_id: queryId.optional(), ...timeWindow });
+const readingsQuery = z.strictObject({
+  ...page,
+  province_id: queryId.optional(),
+  district_id: queryId.optional(),
+  substation_id: queryId.optional(),
+  installation_id: queryId.optional(),
+  ...timeWindow,
+});
 const installationReadingsQuery = z.strictObject({ ...page, ...timeWindow });
+
+// The instant the summary is computed "as of"; defaults to now. Lets a caller
+// ask what the district looked like at midday yesterday, not only right now.
+const summaryQuery = z.strictObject({ at: timestamp.optional() });
 
 // Bodies. Numbers must arrive as JSON numbers, not numeric strings.
 
@@ -110,6 +121,7 @@ module.exports = {
   substationInstallationsQuery,
   readingsQuery,
   installationReadingsQuery,
+  summaryQuery,
   createReadingBody,
   createInstallationBody,
   replaceInstallationBody,

@@ -1,6 +1,14 @@
 'use strict';
 
 const FILTERABLE_FIELDS = {
+  provinces: {},
+  districts: {
+    province_id: 'integer',
+  },
+  gridSubstations: {
+    province_id: 'integer',
+    district_id: 'integer',
+  },
   installations: {
     province_id: 'integer',
     district_id: 'integer',
@@ -8,6 +16,9 @@ const FILTERABLE_FIELDS = {
     status: 'enum:active,inactive,decommissioned',
   },
   readings: {
+    province_id: 'integer',
+    district_id: 'integer',
+    substation_id: 'integer',
     installation_id: 'integer',
     recorded_at_start: 'datetime',
     recorded_at_end: 'datetime',
