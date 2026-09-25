@@ -7,6 +7,8 @@ const validate = require('../middleware/validate');
 const { withLinks } = require('../utils/pagination');
 const requireScope = require('../middleware/requireScope');
 const requirePrincipal = require('../middleware/requirePrincipal');
+const requireRole = require('../middleware/requireRole');
+const rateLimits = require('../middleware/rateLimits');
 const methodNotAllowed = require('../middleware/methodNotAllowed');
 const {
   idParams,
@@ -24,13 +26,17 @@ const readingsService = require('../services/readings');
 
 const router = express.Router();
 
-const canRead = requireScope('installations:read');
-const canWrite = [requirePrincipal('user'), requireScope('installations:write')];
+// Principal type first, then scope: a device token fails on type before any
+// scope string is looked at, so the write-read split does not depend on
+// scopes being assigned correctly.
+const canRead = [requirePrincipal('user'), requireScope('installations:read')];
+const canReadReadings = [requirePrincipal('user'), requireScope('readings:read')];
+const canWrite = [requirePrincipal('user'), requireRole('admin'), requireScope('installations:write')];
 const byId = validate(idParams, 'params');
 const noQuery = validate(emptyQuery, 'query');
 
 // GET /installations
-router.get('/', canRead, validate(installationsQuery, 'query'), async (req, res) => {
+router.get('/', ...canRead, validate(installationsQuery, 'query'), async (req, res) => {
   const { limit, offset, sort, ...filters } = req.validated.query;
   res.json(withLinks(req, await installationsService.listInstallations(limit, offset, req.scope, sort, filters)));
 });
@@ -44,7 +50,7 @@ router.post('/', ...canWrite, validate(createInstallationBody, 'body'), async (r
 });
 
 router.route('/:id')
-  .get(canRead, byId, noQuery, async (req, res) => {
+  .get(...canRead, byId, noQuery, async (req, res) => {
     res.json(await installationsService.getInstallationById(req.validated.params.id, req.scope));
   })
   .put(...canWrite, byId, validate(replaceInstallationBody, 'body'), async (req, res) => {
@@ -64,25 +70,26 @@ router.route('/:id')
   .all(methodNotAllowed('GET, HEAD, PUT, PATCH, DELETE'));
 
 // GET /installations/:id/overview — composite
-router.get('/:id/overview', canRead, byId, noQuery, async (req, res) => {
+router.get('/:id/overview', ...canRead, byId, noQuery, async (req, res) => {
   res.json(await installationsService.getInstallationOverview(req.validated.params.id, req.scope));
 });
 
 // GET /installations/:id/last-known-reading — derived, operational
-router.get('/:id/last-known-reading', canRead, byId, noQuery, async (req, res) => {
+router.get('/:id/last-known-reading', ...canRead, byId, noQuery, async (req, res) => {
   res.json(await installationsService.getLastKnownReading(req.validated.params.id, req.scope));
 });
 
 // /installations/:id/readings — the analytical history, and the device's
 // ingestion point.
 router.route('/:id/readings')
-  .get(requireScope('readings:read'), byId, validate(installationReadingsQuery, 'query'), async (req, res) => {
+  .get(...canReadReadings, byId, validate(installationReadingsQuery, 'query'), async (req, res) => {
     const { limit, offset, sort, ...filters } = req.validated.query;
     res.json(withLinks(req, await readingsService.listInstallationReadings(
       req.validated.params.id, limit, offset, req.scope, sort, filters
     )));
   })
   .post(
+    rateLimits.ingestion,
     requirePrincipal('device'),
     requireScope('readings:write'),
     byId,
@@ -104,7 +111,7 @@ router.route('/:id/readings')
 
 // Readings are append-only: the refusal of every mutation is the feature.
 router.route('/:id/readings/:reading_id')
-  .get(requireScope('readings:read'), validate(readingParams, 'params'), noQuery, async (req, res) => {
+  .get(...canReadReadings, validate(readingParams, 'params'), noQuery, async (req, res) => {
     const { id, reading_id } = req.validated.params;
     res.json(await readingsService.getInstallationReading(id, reading_id, req.scope));
   })

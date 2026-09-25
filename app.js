@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const express = require('express');
+const helmet = require('helmet');
 
 const env = require('./config/env');
 const db = require('./db/client');
@@ -11,6 +12,7 @@ const etagHandler = require('./middleware/etagHandler');
 const negotiate = require('./middleware/negotiate');
 const errorHandler = require('./middleware/errorHandler');
 const notFound = require('./middleware/notFound');
+const rateLimits = require('./middleware/rateLimits');
 
 const app = express();
 
@@ -21,11 +23,16 @@ const app = express();
 // the one hop this setting reads.
 app.set('trust proxy', 1);
 
-// One ETag owner. utils/etag.js becomes the only producer in session A6;
-// two generators produce two values for one body and caches never hit.
+// One ETag owner: utils/etag.js. Two generators would produce two values for
+// one body and caches would never hit.
 app.set('etag', false);
 
 app.disable('x-powered-by');
+
+// Security headers: HSTS, nosniff, frame denial, a restrictive CSP. No CORS
+// headers are sent, so browsers refuse cross-origin reads by default; there
+// is no browser client to allow.
+app.use(helmet({ frameguard: { action: 'deny' } }));
 
 app.use(express.json({ limit: '16kb', strict: true }));
 
@@ -65,9 +72,10 @@ const readingsRouter = require('./routes/readings');
 
 // 406 / 415 apply to every API route, the public auth endpoints included.
 app.use('/api/v1', negotiate);
+app.use('/api/v1', rateLimits.general);
 
-// Authentication endpoints (public).
-app.use('/api/v1/auth', authRouter);
+// Authentication endpoints (public), with a tighter limit on failed attempts.
+app.use('/api/v1/auth', rateLimits.auth, authRouter);
 
 // Protected endpoints: require authentication and jurisdiction scoping.
 app.use('/api/v1', authenticate);
