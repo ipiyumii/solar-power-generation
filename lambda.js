@@ -13,4 +13,7 @@ const app = require('./app');
 
 // Built once per container, not per invocation — the wrapper is reused across
 // warm invocations along with the database pool it closes over.
-module.exports.handler = serverless(app);
+// Responses are passed to API Gateway as text unless their type is listed as
+// binary; without this, Swagger UI's PNG favicon arrives corrupted. JSON is
+// unaffected.
+module.exports.handler = serverless(app, { binary: ['image/*'] });
