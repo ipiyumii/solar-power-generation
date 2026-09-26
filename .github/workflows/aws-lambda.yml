@@ -25,7 +25,7 @@ jobs:
           mkdir -p build/lambda
 
           cp -r app.js index.js lambda.js package.json package-lock.json \
-                config/ db/ middleware/ utils/ routes/ services/ repositories/ \
+                config/ db/ middleware/ utils/ routes/ services/ repositories/ openapi/ \
                 build/lambda/
 
           if [ ! -f build/lambda/db/rds-ca-bundle.pem ]; then

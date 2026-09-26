@@ -1,0 +1,2510 @@
+openapi: 3.1.0
+info:
+  title: SLSEA Solar Generation API
+  description: |
+    Real-time and historical generation data for Sri Lanka's rooftop solar estate.
+
+    ## Authentication
+
+    All endpoints require JWT bearer tokens (HS256) except `/auth/login` and `/auth/device-token`.
+    Provide the token in the `Authorization` header: `Bearer <token>`.
+
+    Two token types:
+    - **User tokens** (`typ: 'user'`) — identify a person scoped to a jurisdiction (province, district)
+    - **Device tokens** (`typ: 'device'`) — identify a metering device bound to a single installation
+
+    ## Authorization rules
+
+    - **Scope:** Every endpoint enforces a minimum scope (e.g., `installations:read`, `readings:write`)
+    - **Principal type:** Some endpoints are user-only, others device-only
+    - **Admin role:** Writes to installations require `role: 'admin'`
+    - **Jurisdiction:** Reads scoped to the user's province or district; devices can only write to their own installation
+
+    ## Important status code rules
+
+    - **404 not 403 on reads:** A cross-jurisdiction read returns 404, identical to a missing resource — a 403 would confirm the resource exists
+    - **INSTALLATION_MISMATCH exception:** A device posting to an installation that is not its own gets 403 (not 404), because the device already knows its own site exists
+    - **?at= on summary:** The `?at=ISO-8601` parameter on `/districts/{id}/generation-summary` computes the summary "as of" that instant, defaulting to now
+
+    ## Readings are append-only
+
+    A replayed reading (same installation and `recorded_at`) returns 409 Conflict with a `Location` header pointing at the existing reading. The database enforces this: the application's MySQL user holds only `SELECT, INSERT` on `readings`.
+
+    ## Seed data
+
+    - Kandy is district 4 in province 2
+    - Readings are every 15 minutes (672 per installation per 7 days)
+    - `energy_kwh` is a cumulative lifetime counter, monotonic per installation — a period's energy is `last − first`, never a sum
+  version: 1.0.0
+  contact:
+    name: SLSEA
+    url: https://www.energy.gov.lk
+
+servers:
+  - url: https://4qfu2ftwie.execute-api.us-east-1.amazonaws.com/api/v1
+    description: Production
+  - url: http://localhost:5000/api/v1
+    description: Local development
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT bearer token (HS256). Provide in Authorization header.
+
+  schemas:
+    Error:
+      type: object
+      required: [ error ]
+      properties:
+        error:
+          type: object
+          required: [ code, message, details, request_id, timestamp ]
+          properties:
+            code:
+              type: string
+              enum:
+                - AUTHENTICATION_REQUIRED
+                - INVALID_TOKEN
+                - INSUFFICIENT_SCOPE
+                - PERMISSION_DENIED
+                - INSTALLATION_MISMATCH
+                - NOT_FOUND
+                - VALIDATION_FAILED
+                - CONFLICT
+                - PRECONDITION_FAILED
+                - PAYLOAD_TOO_LARGE
+                - UNSUPPORTED_MEDIA_TYPE
+                - METHOD_NOT_ALLOWED
+                - NOT_ACCEPTABLE
+                - TOO_MANY_REQUESTS
+                - INTERNAL_ERROR
+              description: Machine-readable error code
+            message:
+              type: string
+              description: Human-readable error message
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                    description: Field name (for validation errors)
+                  issue:
+                    type: string
+                    description: Description of the issue
+              description: Validation details (empty for non-validation errors)
+            request_id:
+              type: string
+              format: uuid
+              description: Unique request identifier for logging
+            timestamp:
+              type: string
+              format: date-time
+              description: ISO 8601 timestamp with timezone
+
+    Pagination:
+      type: object
+      required: [ total_count, limit, offset, returned ]
+      properties:
+        total_count:
+          type: integer
+          minimum: 0
+          description: Total number of resources matching the query
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+          description: Page size
+        offset:
+          type: integer
+          minimum: 0
+          description: Offset from the start of the collection
+        returned:
+          type: integer
+          description: Number of resources in this page
+
+    Links:
+      type: object
+      required: [ self, first, prev, next, last ]
+      properties:
+        self:
+          type: string
+          format: uri
+          description: Link to this page
+        first:
+          type: string
+          format: uri
+          description: Link to the first page
+        prev:
+          type: string
+          format: uri
+          nullable: true
+          description: Link to the previous page (null on first page)
+        next:
+          type: string
+          format: uri
+          nullable: true
+          description: Link to the next page (null on last page)
+        last:
+          type: string
+          format: uri
+          description: Link to the last page
+
+    Province:
+      type: object
+      required: [ province_id, name ]
+      properties:
+        province_id:
+          type: integer
+          example: 2
+        name:
+          type: string
+          example: Central Province
+
+    District:
+      type: object
+      required: [ district_id, province_id, name ]
+      properties:
+        district_id:
+          type: integer
+          example: 4
+        province_id:
+          type: integer
+          example: 2
+        name:
+          type: string
+          example: Kandy
+
+    GridSubstation:
+      type: object
+      required: [ substation_id, district_id, province_id, name ]
+      properties:
+        substation_id:
+          type: integer
+          example: 8
+        district_id:
+          type: integer
+          example: 4
+        province_id:
+          type: integer
+          example: 2
+        name:
+          type: string
+          example: Kandy Central
+
+    Installation:
+      type: object
+      required:
+        - installation_id
+        - reference
+        - meter_id
+        - inverter_id
+        - substation_id
+        - province_id
+        - district_id
+        - capacity_kw
+        - panel_count
+        - status
+        - commissioned_on
+        - address_line
+        - latitude
+        - longitude
+      properties:
+        installation_id:
+          type: integer
+          example: 61
+        reference:
+          type: string
+          maxLength: 32
+          example: KANDY-CENTRAL-001
+        meter_id:
+          type: string
+          maxLength: 32
+          example: MTR-000042
+        inverter_id:
+          type: string
+          maxLength: 48
+          example: INV-SMA-2025
+        substation_id:
+          type: integer
+          example: 8
+        province_id:
+          type: integer
+          example: 2
+        district_id:
+          type: integer
+          example: 4
+        capacity_kw:
+          type: number
+          format: double
+          example: 10.5
+        panel_count:
+          type: integer
+          example: 28
+        status:
+          type: string
+          enum: [ active, inactive, decommissioned ]
+          example: active
+        commissioned_on:
+          type: string
+          format: date
+          example: "2024-01-15"
+        address_line:
+          type: string
+          maxLength: 160
+          example: 123 Temple Road, Kandy
+        latitude:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          example: 6.9271
+        longitude:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          example: 80.7789
+
+    Reading:
+      type: object
+      required:
+        - reading_id
+        - installation_id
+        - recorded_at
+        - power_kw
+        - energy_kwh
+        - voltage_v
+      properties:
+        reading_id:
+          type: integer
+          example: 42560
+        installation_id:
+          type: integer
+          example: 61
+        recorded_at:
+          type: string
+          format: date-time
+          description: ISO 8601 with offset
+          example: "2026-09-24T14:30:00+05:30"
+        power_kw:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1000
+          description: Instantaneous power in kilowatts
+          example: 6.2
+        energy_kwh:
+          type: number
+          format: double
+          minimum: 0
+          description: Cumulative lifetime energy in kilowatt-hours
+          example: 44.5
+        voltage_v:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 500
+          description: Grid voltage in volts
+          example: 232.1
+
+    Overview:
+      type: object
+      required:
+        - installation
+        - substation
+        - district
+        - province
+        - last_reading
+        - today_energy
+        - lifetime_energy
+        - capacity_utilization_percent
+      properties:
+        installation:
+          $ref: '#/components/schemas/Installation'
+        substation:
+          $ref: '#/components/schemas/GridSubstation'
+        district:
+          $ref: '#/components/schemas/District'
+        province:
+          $ref: '#/components/schemas/Province'
+        last_reading:
+          $ref: '#/components/schemas/Reading'
+        today_energy:
+          type: number
+          format: double
+          description: Total energy generated today (kWh)
+          example: 52.3
+        lifetime_energy:
+          type: number
+          format: double
+          description: Cumulative lifetime energy (kWh)
+          example: 1847.6
+        capacity_utilization_percent:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: Percentage of nominal capacity currently in use
+          example: 59.0
+
+    LastKnownReading:
+      $ref: '#/components/schemas/Reading'
+
+    GenerationSummary:
+      type: object
+      required:
+        - district_id
+        - recorded_at
+        - total_power_kw
+        - total_energy_kwh
+        - active_installations
+        - stale_installations
+      properties:
+        district_id:
+          type: integer
+          example: 4
+        recorded_at:
+          type: string
+          format: date-time
+          description: The instant "as of" which this summary was computed
+          example: "2026-09-24T14:30:00Z"
+        total_power_kw:
+          type: number
+          format: double
+          description: Sum of instantaneous power across all installations
+          example: 127.5
+        total_energy_kwh:
+          type: number
+          format: double
+          description: Today's energy generated (sum of all installations' delta)
+          example: 1850.3
+        active_installations:
+          type: integer
+          description: Installations with readings today
+          example: 12
+        stale_installations:
+          type: integer
+          description: Installations with no readings today (flagged as stale)
+          example: 2
+
+    User:
+      type: object
+      required: [ user_id, email, role, jurisdiction ]
+      properties:
+        user_id:
+          type: integer
+          example: 1
+        email:
+          type: string
+          format: email
+          example: kandy.officer@slsea.lk
+        role:
+          type: string
+          enum: [ analyst, officer, admin ]
+          example: officer
+        jurisdiction:
+          type: object
+          required: [ level, province_id ]
+          properties:
+            level:
+              type: string
+              enum: [ national, province, district ]
+              example: district
+            province_id:
+              type: integer
+              example: 2
+            district_id:
+              type: integer
+              example: 4
+
+    AuthLoginResponse:
+      type: object
+      required: [ token, user ]
+      properties:
+        token:
+          type: string
+          format: jwt
+          description: JWT bearer token for Authorization header
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        user:
+          $ref: '#/components/schemas/User'
+
+    AuthDeviceTokenResponse:
+      type: object
+      required: [ token, installation ]
+      properties:
+        token:
+          type: string
+          format: jwt
+          description: JWT bearer token for Authorization header
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        installation:
+          type: object
+          required: [ installation_id, meter_id ]
+          properties:
+            installation_id:
+              type: integer
+              example: 61
+            meter_id:
+              type: string
+              example: MTR-000042
+
+    ProvinceCollection:
+      type: object
+      required: [ data, pagination, links ]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Province'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        links:
+          $ref: '#/components/schemas/Links'
+
+    DistrictCollection:
+      type: object
+      required: [ data, pagination, links ]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/District'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        links:
+          $ref: '#/components/schemas/Links'
+
+    GridSubstationCollection:
+      type: object
+      required: [ data, pagination, links ]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/GridSubstation'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        links:
+          $ref: '#/components/schemas/Links'
+
+    InstallationCollection:
+      type: object
+      required: [ data, pagination, links ]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Installation'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        links:
+          $ref: '#/components/schemas/Links'
+
+    ReadingCollection:
+      type: object
+      required: [ data, pagination, links ]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Reading'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        links:
+          $ref: '#/components/schemas/Links'
+
+    CreateInstallationResponse:
+      allOf:
+        - $ref: '#/components/schemas/Installation'
+        - type: object
+          required: [ device_secret ]
+          properties:
+            device_secret:
+              type: string
+              description: The device secret for this installation (returned once, here only)
+              example: secret-device-key-unique-to-this-installation
+  responses:
+    NotModified:
+      description: Not Modified — the If-None-Match ETag matches (or, when no If-None-Match is sent, If-Modified-Since is not older than Last-Modified). The body is empty.
+      headers:
+        ETag:
+          description: The current ETag, unchanged
+          schema:
+            type: string
+    UnsupportedMediaType:
+      description: The request body was not sent as application/json
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/login:
+    post:
+      tags: [ Authentication ]
+      summary: User login
+      description: Authenticate as an SLSEA staff member and receive a user token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ email, password ]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: kandy.officer@slsea.lk
+                password:
+                  type: string
+                  example: replace-with-the-seeded-password
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthLoginResponse'
+        '400':
+          description: Malformed request body — missing field, invalid email format, unknown field, or invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: >-
+            Unknown email, wrong password, or inactive account. All three return the identical body, so the response cannot be used to discover which emails exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: INVALID_CREDENTIALS
+                  message: Invalid email or password.
+                  details: []
+                  request_id: e18f905a-4fd1-48a4-afca-cce13f86fd07
+                  timestamp: '2026-09-25T13:51:17.418Z'
+        '429':
+          description: Too many login attempts
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+
+  /auth/device-token:
+    post:
+      tags: [ Authentication ]
+      summary: Device login
+      description: Authenticate as a metering device and receive a device token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ meter_id, device_secret ]
+              properties:
+                meter_id:
+                  type: string
+                  example: MTR-000042
+                device_secret:
+                  type: string
+                  example: replace-with-the-seeded-device-secret
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthDeviceTokenResponse'
+        '400':
+          description: Malformed request body — missing field, unknown field, or invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: >-
+            Unknown meter_id, wrong device_secret, or an installation that is not active. All three return the identical body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: INVALID_CREDENTIALS
+                  message: Invalid meter ID or device secret.
+                  details: []
+                  request_id: 3b1f0c2e-7a4d-4e9b-8c6f-2d5a9e1b7c40
+                  timestamp: '2026-09-25T13:51:17.418Z'
+        '429':
+          description: Too many login attempts
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+
+  /provinces:
+    get:
+      tags: [ Hierarchy ]
+      summary: List provinces
+      description: List all provinces (user-only, requires installations:read scope)
+      operationId: listProvinces
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: sort
+          in: query
+          schema:
+            type: string
+          description: Sort field, format "field:asc" or "field:desc"
+      responses:
+        '200':
+          description: List of provinces
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: Entity tag for caching
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvinceCollection'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope (device tokens not allowed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '406':
+          description: Unsupported media type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Payload too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: Unsupported media type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+
+  /provinces/{id}:
+    get:
+      tags: [ Hierarchy ]
+      summary: Get province details
+      description: Get a single province by ID (user-only, requires installations:read scope)
+      operationId: getProvince
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 2
+      responses:
+        '200':
+          description: Province details
+          headers:
+            ETag:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+                format: date-time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Province'
+        '400':
+          description: Invalid path parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Province not found (or outside user's jurisdiction)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '406':
+          description: Not acceptable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+
+  /provinces/{id}/districts:
+    get:
+      tags: [ Hierarchy ]
+      summary: List districts in a province
+      description: List districts for a specific province (user-only, requires installations:read scope)
+      operationId: listProvinceDistricts
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 2
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: sort
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of districts
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DistrictCollection'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Province not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+
+  /districts:
+    get:
+      tags: [ Hierarchy ]
+      summary: List districts
+      description: List all districts, optionally filtered by province (user-only, requires installations:read scope)
+      operationId: listDistricts
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: sort
+          in: query
+          schema:
+            type: string
+        - name: province_id
+          in: query
+          schema:
+            type: integer
+          description: Filter by province
+      responses:
+        '200':
+          description: List of districts
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DistrictCollection'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+
+  /districts/{id}:
+    get:
+      tags: [ Hierarchy ]
+      summary: Get district details
+      description: Get a single district by ID (user-only, requires installations:read scope)
+      operationId: getDistrict
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 4
+      responses:
+        '200':
+          description: District details
+          headers:
+            ETag:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+                format: date-time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/District'
+        '400':
+          description: Invalid path parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: District not found (or outside user's jurisdiction)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+
+  /districts/{id}/grid-substations:
+    get:
+      tags: [ Hierarchy ]
+      summary: List grid substations in a district
+      description: List substations for a specific district (user-only, requires installations:read scope)
+      operationId: listDistrictSubstations
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 4
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: sort
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of substations
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GridSubstationCollection'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: District not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+
+  /districts/{id}/generation-summary:
+    get:
+      tags: [ Operational ]
+      summary: Get district generation summary
+      description: |
+        Get current and today's total energy generation for a district.
+
+        Computes the summary "as of" the `?at=` timestamp (defaults to now).
+        The `at` parameter lets you ask what the district looked like at midday yesterday, not only right now.
+      operationId: getGenerationSummary
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 4
+        - name: at
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: ISO 8601 timestamp; defaults to now
+          example: "2026-09-24T12:00:00+05:30"
+      responses:
+        '200':
+          description: Generation summary
+          headers:
+            ETag:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+                format: date-time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationSummary'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope (requires summary:read)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: District not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+
+  /grid-substations:
+    get:
+      tags: [ Hierarchy ]
+      summary: List grid substations
+      description: List all substations, optionally filtered by district or province (user-only, requires installations:read scope)
+      operationId: listGridSubstations
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: sort
+          in: query
+          schema:
+            type: string
+        - name: province_id
+          in: query
+          schema:
+            type: integer
+        - name: district_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of substations
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GridSubstationCollection'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+
+  /grid-substations/{id}:
+    get:
+      tags: [ Hierarchy ]
+      summary: Get grid substation details
+      description: Get a single substation by ID (user-only, requires installations:read scope)
+      operationId: getGridSubstation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 8
+      responses:
+        '200':
+          description: Substation details
+          headers:
+            ETag:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+                format: date-time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GridSubstation'
+        '400':
+          description: Invalid path parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Substation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+
+  /grid-substations/{id}/installations:
+    get:
+      tags: [ Hierarchy ]
+      summary: List installations in a substation
+      description: List installations for a specific substation (user-only, requires installations:read scope)
+      operationId: listSubstationInstallations
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 8
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: sort
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ active, inactive, decommissioned ]
+      responses:
+        '200':
+          description: List of installations
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationCollection'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Substation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+
+  /installations:
+    get:
+      tags: [ Assets ]
+      summary: List installations
+      description: |
+        List installations, optionally filtered by substation, district, province, or status.
+        User-only, requires installations:read scope.
+      operationId: listInstallations
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: sort
+          in: query
+          schema:
+            type: string
+        - name: province_id
+          in: query
+          schema:
+            type: integer
+        - name: district_id
+          in: query
+          schema:
+            type: integer
+        - name: substation_id
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ active, inactive, decommissioned ]
+      responses:
+        '200':
+          description: List of installations
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationCollection'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+    post:
+      tags: [ Assets ]
+      summary: Create installation
+      description: |
+        Create a new solar installation. Admin-only, requires admin role and installations:write scope.
+
+        The device_secret is returned in this response and nowhere else — store it securely before using it for authentication.
+      operationId: createInstallation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reference
+                - meter_id
+                - inverter_id
+                - capacity_kw
+                - panel_count
+                - status
+                - commissioned_on
+                - address_line
+                - latitude
+                - longitude
+                - substation_id
+              properties:
+                reference:
+                  type: string
+                  maxLength: 32
+                  example: KANDY-CENTRAL-002
+                meter_id:
+                  type: string
+                  maxLength: 32
+                  example: MTR-000043
+                inverter_id:
+                  type: string
+                  maxLength: 48
+                  example: INV-SMA-2026
+                capacity_kw:
+                  type: number
+                  format: double
+                  example: 10.5
+                panel_count:
+                  type: integer
+                  example: 28
+                status:
+                  type: string
+                  enum: [ active, inactive, decommissioned ]
+                  example: active
+                commissioned_on:
+                  type: string
+                  format: date
+                  example: "2024-01-15"
+                address_line:
+                  type: string
+                  maxLength: 160
+                  example: 124 Temple Road, Kandy
+                latitude:
+                  type: number
+                  format: double
+                  example: 6.9271
+                longitude:
+                  type: number
+                  format: double
+                  example: 80.7789
+                substation_id:
+                  type: integer
+                  example: 8
+      responses:
+        '201':
+          description: Installation created
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+              description: URL of the created resource
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateInstallationResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope or not admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Payload too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: Unsupported media type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /installations/{id}:
+    get:
+      tags: [ Assets ]
+      summary: Get installation details
+      description: Get a single installation by ID (user-only, requires installations:read scope)
+      operationId: getInstallation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 61
+      responses:
+        '200':
+          description: Installation details
+          headers:
+            ETag:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+                format: date-time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Installation'
+        '304':
+          description: Not modified (if If-None-Match matches)
+        '400':
+          description: Invalid path parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Installation not found (or outside user's jurisdiction)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      tags: [ Assets ]
+      summary: Replace installation
+      description: |
+        Full replacement of an installation (all mutable fields required).
+        Admin-only, requires admin role and installations:write scope.
+
+        Returns 412 if If-Match header does not match current ETag.
+      operationId: replaceInstallation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 61
+        - name: If-Match
+          in: header
+          schema:
+            type: string
+          description: ETag from a prior GET
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reference
+                - capacity_kw
+                - panel_count
+                - status
+                - commissioned_on
+                - address_line
+                - latitude
+                - longitude
+              properties:
+                reference:
+                  type: string
+                  maxLength: 32
+                capacity_kw:
+                  type: number
+                panel_count:
+                  type: integer
+                status:
+                  type: string
+                  enum: [ active, inactive, decommissioned ]
+                commissioned_on:
+                  type: string
+                  format: date
+                address_line:
+                  type: string
+                  maxLength: 160
+                latitude:
+                  type: number
+                longitude:
+                  type: number
+      responses:
+        '200':
+          description: Installation updated
+          headers:
+            ETag:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+                format: date-time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Installation'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope or not admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Installation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '412':
+          description: Precondition failed (If-Match does not match ETag)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Payload too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: Unsupported media type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      tags: [ Assets ]
+      summary: Partial update installation
+      description: |
+        Partial update of an installation (provide only fields to change).
+        Admin-only, requires admin role and installations:write scope.
+
+        Returns 412 if If-Match header does not match current ETag.
+      operationId: patchInstallation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: If-Match
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reference:
+                  type: string
+                capacity_kw:
+                  type: number
+                panel_count:
+                  type: integer
+                status:
+                  type: string
+                commissioned_on:
+                  type: string
+                address_line:
+                  type: string
+                latitude:
+                  type: number
+                longitude:
+                  type: number
+      responses:
+        '200':
+          description: Installation updated
+          headers:
+            ETag:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+                format: date-time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Installation'
+        '400':
+          description: Invalid request or no fields provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope or not admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Installation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '412':
+          description: Precondition failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Payload too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+    delete:
+      tags: [ Assets ]
+      summary: Delete installation
+      description: |
+        Delete an installation.
+        Admin-only, requires admin role and installations:write scope.
+
+        Returns 409 if the installation has readings (append-only enforcement).
+        Returns 412 if If-Match header does not match current ETag.
+      operationId: deleteInstallation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: If-Match
+          in: header
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Installation deleted (empty body)
+        '400':
+          description: Invalid path parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope or not admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Installation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict — installation has readings (cannot delete)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '412':
+          description: Precondition failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /installations/{id}/overview:
+    get:
+      tags: [ Operational ]
+      summary: Get installation overview
+      description: |
+        Composite endpoint: installation details, substation, jurisdiction chain, latest reading, and energy aggregates.
+        Executes 5 parallel queries for efficiency.
+        User-only, requires installations:read scope.
+      operationId: getInstallationOverview
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 61
+      responses:
+        '200':
+          description: Installation overview
+          headers:
+            ETag:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+                format: date-time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Overview'
+        '400':
+          description: Invalid path parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Installation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+
+  /installations/{id}/last-known-reading:
+    get:
+      tags: [ Operational ]
+      summary: Get last known reading
+      description: |
+        Most recent meter reading for an installation.
+        User-only, requires installations:read scope.
+      operationId: getLastKnownReading
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 61
+      responses:
+        '200':
+          description: Most recent reading
+          headers:
+            ETag:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+                format: date-time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LastKnownReading'
+        '400':
+          description: Invalid path parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Installation not found or has no readings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+
+  /installations/{id}/readings:
+    get:
+      tags: [ Analytical ]
+      summary: List readings for installation
+      description: |
+        Historical readings for a specific installation, paginated and optionally filtered.
+        User-only, requires readings:read scope.
+      operationId: listInstallationReadings
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 61
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: sort
+          in: query
+          schema:
+            type: string
+          description: Sort field, e.g. "recorded_at:asc"
+        - name: recorded_at_start
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: ISO 8601 start time
+        - name: recorded_at_end
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: ISO 8601 end time
+      responses:
+        '200':
+          description: List of readings
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadingCollection'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Installation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+    post:
+      tags: [ Ingestion ]
+      summary: Create reading
+      description: |
+        Submit a meter reading from a device.
+        Device-only, requires device token with readings:write scope.
+
+        A device may only write to its own installation (bound at token creation).
+        Replayed readings (same installation and recorded_at) return 409 Conflict with Location header.
+        Rate-limited to protect ingestion channels.
+      operationId: createReading
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 61
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ recorded_at, power_kw, energy_kwh, voltage_v ]
+              properties:
+                recorded_at:
+                  type: string
+                  format: date-time
+                  example: "2026-09-24T14:30:00+05:30"
+                power_kw:
+                  type: number
+                  format: double
+                  minimum: 0
+                  maximum: 1000
+                  example: 6.2
+                energy_kwh:
+                  type: number
+                  format: double
+                  minimum: 0
+                  example: 44.5
+                voltage_v:
+                  type: number
+                  format: double
+                  minimum: 0
+                  maximum: 500
+                  example: 232.1
+      responses:
+        '201':
+          description: Reading created
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+              description: URL of the created reading
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reading'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Device bound to different installation (INSTALLATION_MISMATCH)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Installation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict — reading already exists for this timestamp
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+              description: URL of the existing reading
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Payload too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: Unsupported media type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Too many requests (rate limited)
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /installations/{id}/readings/{reading_id}:
+    get:
+      tags: [ Analytical ]
+      summary: Get reading details
+      description: Get a specific reading for an installation (user-only, requires readings:read scope)
+      operationId: getInstallationReading
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 61
+        - name: reading_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 42560
+      responses:
+        '200':
+          description: Reading details
+          headers:
+            ETag:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+                format: date-time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reading'
+        '304':
+          description: Not modified
+        '400':
+          description: Invalid path parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Installation or reading not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    all:
+      tags: [ Analytical ]
+      summary: Readings are append-only
+      description: Readings are immutable; mutations are not allowed
+      responses:
+        '405':
+          description: Method not allowed
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: "GET, HEAD"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /readings:
+    get:
+      tags: [ Analytical ]
+      summary: List all readings
+      description: |
+        Estate-wide historical readings, paginated and optionally filtered.
+        User-only, requires readings:read scope.
+      operationId: listReadings
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: sort
+          in: query
+          schema:
+            type: string
+        - name: province_id
+          in: query
+          schema:
+            type: integer
+        - name: district_id
+          in: query
+          schema:
+            type: integer
+        - name: substation_id
+          in: query
+          schema:
+            type: integer
+        - name: installation_id
+          in: query
+          schema:
+            type: integer
+        - name: recorded_at_start
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: recorded_at_end
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: List of readings
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadingCollection'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "304":
+          $ref: "#/components/responses/NotModified"
+
+  /readings/{id}:
+    get:
+      tags: [ Analytical ]
+      summary: Get reading details
+      description: Get a specific reading by ID (user-only, requires readings:read scope)
+      operationId: getReading
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Reading details
+          headers:
+            ETag:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+                format: date-time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reading'
+        '304':
+          description: Not modified
+        '400':
+          description: Invalid path parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Reading not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
